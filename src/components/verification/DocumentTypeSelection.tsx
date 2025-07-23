@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CreditCard, BookOpen, FileText, Check } from "lucide-react";
+import { CreditCard, BookOpen, FileText, Check, ArrowLeft, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -45,96 +45,129 @@ export const DocumentTypeSelection = ({ onDocumentTypeSelect, onBack }: Document
   const [selectedType, setSelectedType] = useState<DocumentType | null>(null);
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <div className="text-center mb-8">
-        <h2 className="text-2xl font-semibold mb-2">Choose Document Type</h2>
-        <p className="text-muted-foreground">
-          Select the type of government-issued ID you'd like to use for verification
-        </p>
-      </div>
+    <div className="animate-fade-in">
+      <div className="lg:max-w-6xl lg:mx-auto px-4">
+        
+        {/* Header */}
+        <div className="text-center mb-8 lg:mb-12">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary/10 rounded-full mb-6 animate-pulse-glow">
+            <Shield className="w-8 h-8 text-primary animate-float" />
+          </div>
+          <h1 className="text-3xl lg:text-4xl font-bold mb-4 bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+            Choose Document Type
+          </h1>
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+            Select the type of government-issued ID you'd like to use for verification. 
+            All documents are processed securely and with bank-level encryption.
+          </p>
+        </div>
 
-      {/* Document Type Cards */}
-      <div className="grid gap-4 mb-8">
-        {documentTypes.map((docType) => {
-          const Icon = docType.icon;
-          const isSelected = selectedType?.id === docType.id;
+        {/* Document Type Cards - Responsive Grid */}
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+          {documentTypes.map((docType, index) => {
+            const Icon = docType.icon;
+            const isSelected = selectedType?.id === docType.id;
 
-          return (
-            <Card
-              key={docType.id}
-              className={cn(
-                "p-6 cursor-pointer transition-all duration-200 border-2",
-                isSelected 
-                  ? "border-primary bg-primary/5 shadow-md" 
-                  : "border-transparent hover:border-border hover:shadow-sm"
-              )}
-              onClick={() => setSelectedType(docType)}
-            >
-              <div className="flex items-start space-x-4">
-                <div className={cn(
-                  "flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center",
-                  isSelected ? "bg-primary text-primary-foreground" : "bg-muted"
-                )}>
-                  <Icon className="w-6 h-6" />
-                </div>
-                
-                <div className="flex-1">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="font-semibold text-lg">{docType.name}</h3>
+            return (
+              <Card
+                key={docType.id}
+                className={cn(
+                  "cursor-pointer transition-all duration-300 border-2 group hover:-translate-y-1",
+                  "animate-slide-up",
+                  isSelected 
+                    ? "border-primary bg-gradient-to-br from-primary/5 to-primary/10 shadow-lg shadow-primary/20" 
+                    : "border-transparent hover:border-primary/30 hover:shadow-lg hover:shadow-primary/10"
+                )}
+                style={{ animationDelay: `${index * 0.1}s` }}
+                onClick={() => setSelectedType(docType)}
+              >
+                <div className="p-6 lg:p-8">
+                  {/* Icon and selection indicator */}
+                  <div className="flex items-center justify-between mb-4">
+                    <div className={cn(
+                      "w-14 h-14 rounded-xl flex items-center justify-center transition-all duration-300",
+                      "group-hover:scale-110",
+                      isSelected 
+                        ? "bg-primary text-primary-foreground shadow-lg" 
+                        : "bg-muted group-hover:bg-primary/10"
+                    )}>
+                      <Icon className="w-7 h-7" />
+                    </div>
                     {isSelected && (
-                      <div className="w-6 h-6 bg-primary rounded-full flex items-center justify-center">
-                        <Check className="w-4 h-4 text-primary-foreground" />
+                      <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center animate-scale-in">
+                        <Check className="w-5 h-5 text-primary-foreground" />
                       </div>
                     )}
                   </div>
-                  <p className="text-muted-foreground mb-3">{docType.description}</p>
                   
-                  <div className="space-y-1">
-                    <p className="text-sm font-medium text-foreground">Requirements:</p>
-                    <ul className="space-y-1">
-                      {docType.requirements.map((requirement, index) => (
-                        <li key={index} className="text-sm text-muted-foreground flex items-center">
-                          <div className="w-1 h-1 bg-muted-foreground rounded-full mr-2 flex-shrink-0" />
+                  {/* Content */}
+                  <h3 className="font-bold text-xl mb-2 group-hover:text-primary transition-colors">
+                    {docType.name}
+                  </h3>
+                  <p className="text-muted-foreground mb-4 text-sm leading-relaxed">
+                    {docType.description}
+                  </p>
+                  
+                  {/* Requirements */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold text-foreground">Requirements:</p>
+                    <ul className="space-y-2">
+                      {docType.requirements.map((requirement, reqIndex) => (
+                        <li key={reqIndex} className="text-sm text-muted-foreground flex items-center">
+                          <div className="w-1.5 h-1.5 bg-primary rounded-full mr-3 flex-shrink-0" />
                           {requirement}
                         </li>
                       ))}
                     </ul>
                   </div>
                 </div>
+              </Card>
+            );
+          })}
+        </div>
+
+        {/* Selected document confirmation */}
+        {selectedType && (
+          <Card className="max-w-2xl mx-auto p-6 bg-gradient-to-r from-verification-bg/50 to-primary/5 border border-primary/20 mb-8 animate-scale-in backdrop-blur-sm">
+            <div className="flex items-start space-x-4">
+              <div className="w-12 h-12 bg-primary/20 rounded-full flex items-center justify-center flex-shrink-0">
+                <Check className="w-6 h-6 text-primary" />
               </div>
-            </Card>
-          );
-        })}
-      </div>
+              <div>
+                <h4 className="font-semibold text-lg mb-2">Perfect choice!</h4>
+                <p className="text-muted-foreground mb-3">
+                  You've selected <strong>{selectedType.name}</strong> for verification. 
+                  Make sure your document is ready and you're in a well-lit area for the best capture quality.
+                </p>
+                <div className="flex items-center space-x-2 text-sm text-primary">
+                  <Shield className="w-4 h-4" />
+                  <span>Bank-level security and encryption</span>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
 
-      {selectedType && (
-        <Card className="p-4 bg-verification-bg border-primary/20 mb-6">
-          <div className="flex items-start space-x-3">
-            <div className="w-5 h-5 bg-primary rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-              <Check className="w-3 h-3 text-primary-foreground" />
-            </div>
-            <div>
-              <p className="font-medium text-sm mb-1">Good choice!</p>
-              <p className="text-sm text-muted-foreground">
-                Make sure your {selectedType.name.toLowerCase()} is ready and you're in a well-lit area for the best capture quality.
-              </p>
-            </div>
+        {/* Action Buttons */}
+        <div className="max-w-md mx-auto">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Button 
+              variant="outline" 
+              onClick={onBack} 
+              className="flex-1 group"
+            >
+              <ArrowLeft className="w-4 h-4 mr-2 group-hover:-translate-x-1 transition-transform" />
+              Back
+            </Button>
+            <Button 
+              onClick={() => selectedType && onDocumentTypeSelect(selectedType)}
+              disabled={!selectedType}
+              className="flex-1 transition-all duration-300 hover:shadow-lg hover:shadow-primary/25"
+            >
+              Continue
+            </Button>
           </div>
-        </Card>
-      )}
-
-      {/* Action Buttons */}
-      <div className="flex gap-3">
-        <Button variant="outline" onClick={onBack} className="flex-1">
-          Back
-        </Button>
-        <Button 
-          onClick={() => selectedType && onDocumentTypeSelect(selectedType)}
-          disabled={!selectedType}
-          className="flex-1"
-        >
-          Continue
-        </Button>
+        </div>
       </div>
     </div>
   );

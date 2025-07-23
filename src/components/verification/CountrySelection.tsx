@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Check, ChevronDown, Globe } from "lucide-react";
+import { Globe, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { CommandSearch } from "@/components/ui/command-search";
 import { cn } from "@/lib/utils";
 
 interface Country {
@@ -30,92 +31,114 @@ interface CountrySelectionProps {
 
 export const CountrySelection = ({ onCountrySelect, onBack }: CountrySelectionProps) => {
   const [selectedCountry, setSelectedCountry] = useState<Country | null>(null);
-  const [isOpen, setIsOpen] = useState(false);
 
-  const handleCountrySelect = (country: Country) => {
-    setSelectedCountry(country);
-    setIsOpen(false);
+  const searchableCountries = countries.map(country => ({
+    id: country.code,
+    label: country.name,
+    icon: country.flag,
+    description: `Government-issued documents from ${country.name}`
+  }));
+
+  const handleCountrySelect = (item: any) => {
+    const country = countries.find(c => c.code === item.id);
+    if (country) {
+      setSelectedCountry(country);
+    }
   };
 
   return (
-    <div className="max-w-md mx-auto">
-      <Card className="p-6 border-0 shadow-lg">
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-12 h-12 bg-primary/10 rounded-full mb-4">
-            <Globe className="w-6 h-6 text-primary" />
-          </div>
-          <h2 className="text-2xl font-semibold mb-2">Select Your Country</h2>
-          <p className="text-muted-foreground">
-            Choose your country of residence to continue with verification
-          </p>
-        </div>
-
-        {/* Country Dropdown */}
-        <div className="relative mb-6">
-          <button
-            onClick={() => setIsOpen(!isOpen)}
-            className={cn(
-              "w-full flex items-center justify-between p-4 border border-input rounded-lg bg-background text-left",
-              "hover:border-ring focus:outline-none focus:ring-2 focus:ring-ring",
-              isOpen && "border-ring ring-2 ring-ring"
-            )}
-          >
-            <div className="flex items-center">
-              {selectedCountry ? (
-                <>
-                  <span className="text-2xl mr-3">{selectedCountry.flag}</span>
-                  <span className="font-medium">{selectedCountry.name}</span>
-                </>
-              ) : (
-                <span className="text-muted-foreground">Select a country...</span>
-              )}
+    <div className="animate-fade-in">
+      {/* Mobile-optimized layout */}
+      <div className="lg:max-w-4xl lg:mx-auto px-4">
+        <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-center min-h-[80vh] lg:min-h-auto">
+          
+          {/* Left column - Info and illustration */}
+          <div className="order-2 lg:order-1 text-center lg:text-left">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-primary/10 rounded-full mb-6 animate-pulse-glow">
+              <Globe className="w-8 h-8 text-primary animate-float" />
             </div>
-            <ChevronDown className={cn("w-5 h-5 transition-transform", isOpen && "rotate-180")} />
-          </button>
-
-          {/* Dropdown Menu */}
-          {isOpen && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-background border border-input rounded-lg shadow-lg z-10 max-h-60 overflow-y-auto">
-              {countries.map((country) => (
-                <button
-                  key={country.code}
-                  onClick={() => handleCountrySelect(country)}
-                  className="w-full flex items-center p-3 hover:bg-muted text-left transition-colors"
-                >
-                  <span className="text-2xl mr-3">{country.flag}</span>
-                  <span className="flex-1">{country.name}</span>
-                  {selectedCountry?.code === country.code && (
-                    <Check className="w-4 h-4 text-primary" />
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {selectedCountry && (
-          <div className="bg-verification-bg p-4 rounded-lg mb-6">
-            <p className="text-sm text-muted-foreground">
-              We'll verify your identity using documents issued by {selectedCountry.name}. 
-              Make sure you have a valid government-issued ID ready.
+            <h1 className="text-3xl lg:text-4xl font-bold mb-4 bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+              Select Your Country
+            </h1>
+            <p className="text-lg text-muted-foreground mb-6 leading-relaxed">
+              Choose your country of residence to continue with verification. 
+              We'll use this to validate your government-issued documents.
             </p>
+            
+            {/* Features list */}
+            <div className="hidden lg:block space-y-3 text-left">
+              <div className="flex items-center space-x-3">
+                <div className="w-2 h-2 bg-primary rounded-full"></div>
+                <span className="text-sm text-muted-foreground">Secure document verification</span>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-2 h-2 bg-accent rounded-full"></div>
+                <span className="text-sm text-muted-foreground">Multiple document types supported</span>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="w-2 h-2 bg-warning rounded-full"></div>
+                <span className="text-sm text-muted-foreground">Fast and reliable process</span>
+              </div>
+            </div>
           </div>
-        )}
 
-        {/* Action Buttons */}
-        <div className="flex gap-3">
-          <Button variant="outline" onClick={onBack} className="flex-1">
-            Back
-          </Button>
-          <Button 
-            onClick={() => selectedCountry && onCountrySelect(selectedCountry)}
-            disabled={!selectedCountry}
-            className="flex-1"
-          >
-            Continue
-          </Button>
+          {/* Right column - Form */}
+          <div className="order-1 lg:order-2">
+            <Card className="border-0 shadow-[var(--shadow-card)] bg-card/80 backdrop-blur-sm animate-slide-up">
+              <div className="p-6 lg:p-8">
+                
+                {/* Country Search */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium mb-3">Country of Residence</label>
+                  <CommandSearch
+                    items={searchableCountries}
+                    selectedId={selectedCountry?.code}
+                    onSelect={handleCountrySelect}
+                    placeholder="Search countries..."
+                    className="w-full"
+                  />
+                </div>
+
+                {/* Selected country info */}
+                {selectedCountry && (
+                  <div className="bg-verification-bg/50 backdrop-blur-sm p-4 rounded-lg mb-6 border border-primary/20 animate-scale-in">
+                    <div className="flex items-start space-x-3">
+                      <div className="w-6 h-6 bg-primary/20 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <div className="w-2 h-2 bg-primary rounded-full"></div>
+                      </div>
+                      <div>
+                        <p className="font-medium text-sm mb-1">Ready to verify with {selectedCountry.name}</p>
+                        <p className="text-sm text-muted-foreground">
+                          Make sure you have a valid government-issued ID from {selectedCountry.name} ready.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button 
+                    variant="outline" 
+                    onClick={onBack} 
+                    className="flex-1 group"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-2 group-hover:-translate-x-1 transition-transform" />
+                    Back
+                  </Button>
+                  <Button 
+                    onClick={() => selectedCountry && onCountrySelect(selectedCountry)}
+                    disabled={!selectedCountry}
+                    className="flex-1 transition-all duration-300 hover:shadow-lg hover:shadow-primary/25"
+                  >
+                    Continue
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
         </div>
-      </Card>
+      </div>
     </div>
   );
 };

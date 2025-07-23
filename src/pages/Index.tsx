@@ -8,6 +8,7 @@ import { DocumentCapture } from "@/components/verification/DocumentCapture";
 import { SelfieCapture } from "@/components/verification/SelfieCapture";
 import { ESignature } from "@/components/verification/ESignature";
 import { VerificationComplete } from "@/components/verification/VerificationComplete";
+import { AnimatedBackground } from "@/components/ui/animated-background";
 
 type VerificationStep = 
   | "landing"
@@ -146,23 +147,32 @@ const Index = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-verification-bg to-background">
-      <div className="container mx-auto px-4 py-8">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-foreground mb-2">Identity Verification</h1>
-          <p className="text-muted-foreground">Complete your verification in a few simple steps</p>
-        </div>
-
-        {/* Progress Stepper */}
+    <AnimatedBackground variant="mesh">
+      <div className="container mx-auto px-4 py-6 lg:py-12">
+        {/* Header - Only show for non-complete steps */}
         {currentStep !== "complete" && (
-          <div className="mb-8">
-            <VerificationStepper steps={stepsWithStatus} currentStep={steps.findIndex(s => getStepStatus(s.id) === "active") + 1} />
+          <div className="text-center mb-8 lg:mb-12">
+            <h1 className="text-2xl lg:text-3xl font-bold text-foreground mb-2 animate-fade-in">
+              Identity Verification
+            </h1>
+            <p className="text-muted-foreground animate-fade-in" style={{ animationDelay: "0.2s" }}>
+              Complete your verification in a few simple steps
+            </p>
+          </div>
+        )}
+
+        {/* Progress Stepper - Mobile optimized */}
+        {currentStep !== "complete" && (
+          <div className="mb-8 lg:mb-12 animate-slide-up" style={{ animationDelay: "0.3s" }}>
+            <VerificationStepper 
+              steps={stepsWithStatus} 
+              currentStep={steps.findIndex(s => getStepStatus(s.id) === "active") + 1} 
+            />
           </div>
         )}
 
         {/* Step Content */}
-        <div className="max-w-4xl mx-auto">
+        <div className="animate-fade-in" style={{ animationDelay: "0.4s" }}>
           {currentStep === "country" && (
             <CountrySelection 
               onCountrySelect={handleCountrySelect}
@@ -214,7 +224,7 @@ const Index = () => {
           )}
         </div>
       </div>
-    </div>
+    </AnimatedBackground>
   );
 };
 
