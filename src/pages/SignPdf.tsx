@@ -13,6 +13,8 @@ import { PdfWithMetadataSignatures } from '../components/pdf/PdfWithSignatures';
 
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://identity-verification-process-h3sgnp77b.vercel.app';
+
 const PdfDropArea = ({ children, pdfDropRef, isOverPdf }: any) => {
   const { setNodeRef, isOver } = useDroppable({ id: 'pdf-drop-area' });
   return (
@@ -98,7 +100,7 @@ const SignPdf = () => {
       formData.append('file', file);
 
       try {
-        const response = await fetch('http://127.0.0.1:3001/api/upload', {
+        const response = await fetch(`${API_URL}/api/upload`, {
           method: 'POST',
           body: formData,
         });
@@ -137,7 +139,7 @@ const SignPdf = () => {
     }));
     
     try {
-      await fetch('http://localhost:3001/api/send-to-preparer', {
+      await fetch(`${API_URL}/api/send-to-preparer`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -177,7 +179,7 @@ const SignPdf = () => {
     formData.append('pdf', pdfFile);
     formData.append('signatures', JSON.stringify(signatures));
     try {
-      const response = await fetch('http://127.0.0.1:3001/api/sign-pdf', {
+      const response = await fetch(`${API_URL}/api/sign-pdf`, {
         method: 'POST',
         body: formData,
       });
@@ -301,7 +303,7 @@ const SignPdf = () => {
     formData.append('signatures', JSON.stringify(signatures));
     try {
       // Generate the signed PDF first
-      const response = await fetch('http://127.0.0.1:3001/api/sign-pdf', {
+      const response = await fetch(`${API_URL}/api/sign-pdf`, {
         method: 'POST',
         body: formData,
       });
@@ -314,7 +316,7 @@ const SignPdf = () => {
         const signedFile = new File([signedBlob], origName, { type: 'application/pdf' });
         uploadForm.append('file', signedFile);
         // Upload to blob storage
-        const uploadResp = await fetch('http://127.0.0.1:3001/api/upload', {
+        const uploadResp = await fetch(`${API_URL}/api/upload`, {
           method: 'POST',
           body: uploadForm,
         });
