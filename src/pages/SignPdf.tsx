@@ -275,6 +275,64 @@ const SignPdf = () => {
 
   // Remove handleDragOver and isOverPdf logic (handled by useDroppable)
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmitSignedPdf = async () => {
+    if (signaturesOnPages.length < 2) {
+      alert('Please ensure both signatures are provided before submitting.');
+      return;
+    }
+    if (!pdfFile || !numPages) return;
+    setIsSubmitting(true);
+    // Prepare signatures data for backend
+    const signatures = signaturesOnPages.map(sig => ({
+      page: sig.page,
+      x: sig.position.x,
+      y: sig.position.y,
+      imageDataUrl: sig.signature.signature,
+      width: sig.signature.width || 128,
+      height: sig.signature.height || 64,
+      name: sig.signature.name,
+      ipAddress: sig.signature.ipAddress,
+      timestamp: sig.signature.timestamp,
+    }));
+    const formData = new FormData();
+    formData.append('pdf', pdfFile);
+    formData.append('signatures', JSON.stringify(signatures));
+    try {
+      // Generate the signed PDF first
+      const response = await fetch('http://127.0.0.1:3001/api/sign-pdf', {
+        method: 'POST',
+        body: formData,
+      });
+      if (response.ok) {
+        const signedBlob = await response.blob();
+        // Prepare to upload to blob storage
+        const uploadForm = new FormData();
+        // Use original filename with _signed appended
+        const origName = pdfFile.name.replace(/\.pdf$/i, '') + '_signed.pdf';
+        const signedFile = new File([signedBlob], origName, { type: 'application/pdf' });
+        uploadForm.append('file', signedFile);
+        // Upload to blob storage
+        const uploadResp = await fetch('http://127.0.0.1:3001/api/upload', {
+          method: 'POST',
+          body: uploadForm,
+        });
+        if (uploadResp.ok) {
+          const data = await uploadResp.json();
+          alert('Signed PDF submitted and saved successfully!\nURL: ' + data.url);
+        } else {
+          alert('Failed to upload signed PDF.');
+        }
+      } else {
+        alert('Failed to generate signed PDF.');
+      }
+    } catch (error) {
+      alert('Failed to submit signed PDF.');
+    }
+    setIsSubmitting(false);
+  };
+
   // Modern UI starts here
   return (
     <DndContext
@@ -457,6 +515,13 @@ const SignPdf = () => {
                           Finalize
                         </Button>
                       )}
+                      <Button
+                        onClick={handleSubmitSignedPdf}
+                        disabled={isSubmitting}
+                        className="w-full md:w-auto shadow-md"
+                      >
+                        {isSubmitting ? 'Submitting...' : 'Submit'}
+                      </Button>
                     </div>
                   </div>
                 )}
