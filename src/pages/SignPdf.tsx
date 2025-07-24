@@ -13,7 +13,7 @@ import { PdfWithMetadataSignatures } from '../components/pdf/PdfWithSignatures';
 
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://identity-verification-process-h3sgnp77b.vercel.app';
+const API_URL = import.meta.env.VITE_API_URL || 'https://identity-verification-process.vercel.app';
 
 const PdfDropArea = ({ children, pdfDropRef, isOverPdf }: any) => {
   const { setNodeRef, isOver } = useDroppable({ id: 'pdf-drop-area' });
