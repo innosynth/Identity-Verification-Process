@@ -1,4 +1,4 @@
-import formidable from 'formidable';
+import { IncomingForm } from 'formidable';
 import { PDFDocument } from 'pdf-lib';
 import fs from 'fs';
 
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
-  const form = new formidable.IncomingForm();
+  const form = new IncomingForm();
   form.parse(req, async (err, fields, files) => {
     if (err) {
       res.status(500).json({ error: 'Error parsing form data' });
