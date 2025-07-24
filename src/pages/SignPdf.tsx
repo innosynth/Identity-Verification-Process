@@ -122,11 +122,10 @@ const SignPdf = () => {
   const goToNextPage = () => setPageNumber(prevPageNumber => Math.min(prevPageNumber + 1, numPages!));
 
   const handleSendToTaxPreparer = async () => {
-    if (!pdfUrl || !signaturesOnPages.length) {
-      alert("Please sign the document first.");
+    if (!pdfUrl) {
+      alert("Please upload a document first.");
       return;
     }
-    
     // Prepare signatures data with consistent coordinate system
     const signaturesData = signaturesOnPages.map(sig => ({
       page: sig.page,
