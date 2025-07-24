@@ -21,7 +21,10 @@ export default async function handler(req, res) {
       return;
     }
     console.log('Files object:', files);
-    const pdfFile = files.pdf;
+    let pdfFile = files.pdf;
+    if (Array.isArray(pdfFile)) {
+      pdfFile = pdfFile[0];
+    }
     console.log('pdfFile:', pdfFile);
     const filePath = pdfFile?.filepath || pdfFile?.path;
     if (!filePath) {
