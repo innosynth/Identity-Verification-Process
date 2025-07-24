@@ -20,7 +20,16 @@ export default async function handler(req, res) {
       res.status(500).json({ error: 'Error parsing form data' });
       return;
     }
+    console.log('Files object:', files);
     const pdfFile = files.pdf;
+    console.log('pdfFile:', pdfFile);
+    const filePath = pdfFile?.filepath || pdfFile?.path;
+    if (!filePath) {
+      console.error('No valid file path found in pdfFile:', pdfFile);
+      res.status(400).json({ error: 'No valid file path for uploaded PDF.' });
+      return;
+    }
+    console.log('Using file path:', filePath);
     const signatures = JSON.parse(fields.signatures);
     if (!pdfFile) {
       console.error('No PDF uploaded.');
@@ -28,8 +37,7 @@ export default async function handler(req, res) {
       return;
     }
     try {
-      console.log('Reading PDF file:', pdfFile.filepath);
-      const pdfBuffer = await fs.promises.readFile(pdfFile.filepath);
+      const pdfBuffer = await fs.promises.readFile(filePath);
       console.log('Loaded PDF buffer, length:', pdfBuffer.length);
       const pdfDoc = await PDFDocument.load(pdfBuffer);
       console.log('Loaded PDF document.');
