@@ -159,12 +159,13 @@ export const DocumentTypeSelection = ({ onDocumentTypeSelect, onBack }: Document
               <ArrowLeft className="w-4 h-4 mr-2 group-hover:-translate-x-1 transition-transform" />
               Back
             </Button>
-            <Button 
-              onClick={() => selectedType && onDocumentTypeSelect(selectedType)}
-              disabled={!selectedType}
-              className="flex-1 transition-all duration-300 hover:shadow-lg hover:shadow-primary/25"
-            >
+            <Button onClick={() => onDocumentTypeSelect(selectedType)} className="flex-1" disabled={!selectedType}>
               Continue
+            </Button>
+          </div>
+          <div className="mt-4 text-center">
+            <Button variant="link" onClick={() => (window as any).setShowDeviceSwitch(true)}>
+              Continue on another device
             </Button>
           </div>
         </div>

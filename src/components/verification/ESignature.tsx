@@ -276,12 +276,13 @@ export const ESignature = ({ onSignatureComplete, onBack }: ESignatureProps) => 
         <Button variant="outline" onClick={onBack} className="flex-1">
           Back
         </Button>
-        <Button 
-          onClick={handleContinue}
-          disabled={!canContinue}
-          className="flex-1"
-        >
-          Complete Signature
+        <Button onClick={handleContinue} disabled={!canContinue} className="flex-1">
+          Complete Verification
+        </Button>
+      </div>
+      <div className="mt-4 text-center">
+        <Button variant="link" onClick={() => (window as any).setShowDeviceSwitch(true)}>
+          Continue on another device
         </Button>
       </div>
     </div>

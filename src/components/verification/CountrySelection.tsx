@@ -12,9 +12,10 @@ interface Country {
 }
 
 const countries: Country[] = [
-  { code: "US", name: "United States", flag: "🇺🇸" },
+  { code: 'IN', name: 'India', flag: '🇮🇳' },
+  { code: 'US', name: 'United States', flag: '🇺🇸' },
+  { code: 'GB', name: 'United Kingdom', flag: '🇬🇧' },
   { code: "CA", name: "Canada", flag: "🇨🇦" },
-  { code: "GB", name: "United Kingdom", flag: "🇬🇧" },
   { code: "AU", name: "Australia", flag: "🇦🇺" },
   { code: "DE", name: "Germany", flag: "🇩🇪" },
   { code: "FR", name: "France", flag: "🇫🇷" },
@@ -22,6 +23,8 @@ const countries: Country[] = [
   { code: "ES", name: "Spain", flag: "🇪🇸" },
   { code: "NL", name: "Netherlands", flag: "🇳🇱" },
   { code: "SE", name: "Sweden", flag: "🇸🇪" },
+  { code: "BR", name: 'Brazil', flag: '🇧🇷' },
+  { code: "ZA", name: 'South Africa', flag: '🇿🇦' },
 ];
 
 interface CountrySelectionProps {
@@ -30,7 +33,7 @@ interface CountrySelectionProps {
 }
 
 export const CountrySelection = ({ onCountrySelect, onBack }: CountrySelectionProps) => {
-  const [selectedCountry, setSelectedCountry] = useState<Country | null>(null);
+  const [selectedCountry, setSelectedCountry] = useState<Country | null>(countries[0]);
 
   const searchableCountries = countries.map(country => ({
     id: country.code,
@@ -132,6 +135,11 @@ export const CountrySelection = ({ onCountrySelect, onBack }: CountrySelectionPr
                     className="flex-1 transition-all duration-300 hover:shadow-lg hover:shadow-primary/25"
                   >
                     Continue
+                  </Button>
+                </div>
+                <div className="mt-4 text-center">
+                  <Button variant="link" onClick={() => (window as any).setShowDeviceSwitch(true)}>
+                    Switch to another device
                   </Button>
                 </div>
               </div>

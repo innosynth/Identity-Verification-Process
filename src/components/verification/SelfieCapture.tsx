@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Video, Play, Pause, RotateCcw, Check, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,6 +15,7 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
   const [recordingTime, setRecordingTime] = useState(0);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [isCameraInitializing, setIsCameraInitializing] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -23,11 +24,18 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
 
   const RECORDING_DURATION = 5; // seconds
 
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
   const startCamera = async () => {
+    setIsCameraInitializing(true);
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user" },
-        audio: false
+        audio: true
       });
       setStream(mediaStream);
       if (videoRef.current) {
@@ -35,6 +43,8 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
       }
     } catch (error) {
       console.error("Error accessing camera:", error);
+    } finally {
+      setIsCameraInitializing(false);
     }
   };
 
@@ -69,11 +79,14 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
     setIsRecording(true);
     setRecordingTime(0);
 
-    // Auto-stop after RECORDING_DURATION seconds
     recordingIntervalRef.current = setInterval(() => {
       setRecordingTime(prev => {
         const newTime = prev + 0.1;
         if (newTime >= RECORDING_DURATION) {
+          if (recordingIntervalRef.current) {
+            clearInterval(recordingIntervalRef.current);
+            recordingIntervalRef.current = null;
+          }
           stopRecording();
           return RECORDING_DURATION;
         }
@@ -110,7 +123,7 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
   const progressPercentage = (recordingTime / RECORDING_DURATION) * 100;
 
   return (
-    <div className="max-w-md mx-auto">
+    <div className="max-w-lg mx-auto">
       <div className="text-center mb-6">
         <h2 className="text-2xl font-semibold mb-2">Record Selfie Video</h2>
         <p className="text-muted-foreground">
@@ -148,14 +161,14 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
             </div>
           )}
 
-          {stream && !hasRecorded && (
+          {(stream || isCameraInitializing) && !hasRecorded && (
             <>
               <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover scale-x-[-1]"
+                className="w-full h-full object-cover"
               />
               <div className="absolute inset-4 border-2 border-primary rounded-full opacity-50" />
               
@@ -182,7 +195,7 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
             <div className="relative w-full h-full">
               <video
                 src={URL.createObjectURL(recordedBlob)}
-                className="w-full h-full object-cover scale-x-[-1]"
+                className="w-full h-full object-cover"
                 controls
               />
               <div className="absolute top-2 right-2 w-8 h-8 bg-success rounded-full flex items-center justify-center">
@@ -195,9 +208,8 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
         {/* Recording Controls */}
         <div className="flex gap-3 mt-4">
           {!stream && !hasRecorded && (
-            <Button onClick={startCamera} className="flex-1">
-              <Video className="w-4 h-4 mr-2" />
-              Start Camera
+            <Button onClick={startCamera} className="flex-1" disabled={isCameraInitializing}>
+              {isCameraInitializing ? "Starting Camera..." : "Start Camera"}
             </Button>
           )}
 
@@ -235,6 +247,11 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
           className="flex-1"
         >
           Continue
+        </Button>
+      </div>
+      <div className="mt-4 text-center">
+        <Button variant="link" onClick={() => (window as any).setShowDeviceSwitch(true)}>
+          Continue on another device
         </Button>
       </div>
     </div>

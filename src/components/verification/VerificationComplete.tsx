@@ -3,14 +3,17 @@ import { CheckCircle, Download, RefreshCw, Home, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { generateVerificationPdf } from "@/lib/pdfGenerator";
 
 interface VerificationCompleteProps {
   onRestart: () => void;
   onHome: () => void;
+  verificationData: any;
 }
 
-export const VerificationComplete = ({ onRestart, onHome }: VerificationCompleteProps) => {
+export const VerificationComplete = ({ onRestart, onHome, verificationData }: VerificationCompleteProps) => {
   const [isProcessing, setIsProcessing] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
 
   // Simulate processing
@@ -21,23 +24,15 @@ export const VerificationComplete = ({ onRestart, onHome }: VerificationComplete
     return () => clearTimeout(timer);
   });
 
-  const handleDownload = () => {
-    // Simulate download progress
-    setDownloadProgress(0);
-    const interval = setInterval(() => {
-      setDownloadProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          // Trigger actual download here
-          const link = document.createElement('a');
-          link.href = 'data:application/pdf;base64,'; // This would be the actual PDF data
-          link.download = 'verification-document.pdf';
-          link.click();
-          return 100;
-        }
-        return prev + 10;
-      });
-    }, 200);
+  const handleDownload = async () => {
+    setIsGenerating(true);
+    try {
+      await generateVerificationPdf(verificationData);
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   if (isProcessing) {
@@ -129,9 +124,9 @@ export const VerificationComplete = ({ onRestart, onHome }: VerificationComplete
             </div>
           )}
           
-          <Button onClick={handleDownload} size="lg" className="w-full sm:w-auto">
+          <Button onClick={handleDownload} size="lg" className="w-full sm:w-auto" disabled={isGenerating}>
             <Download className="w-4 h-4 mr-2" />
-            Download Signed Document (PDF)
+            {isGenerating ? "Generating PDF..." : "Download Signed Document (PDF)"}
           </Button>
         </div>
       </Card>

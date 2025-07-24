@@ -117,12 +117,13 @@ export const TermsAcceptance = ({ onAcceptTerms, onBack }: TermsAcceptanceProps)
         <Button variant="outline" onClick={onBack} className="flex-1">
           Back
         </Button>
-        <Button 
-          onClick={onAcceptTerms}
-          disabled={!canContinue}
-          className="flex-1"
-        >
+        <Button onClick={onAcceptTerms} disabled={!canContinue} className="flex-1">
           Accept & Continue
+        </Button>
+      </div>
+      <div className="mt-4 text-center">
+        <Button variant="link" onClick={() => (window as any).setShowDeviceSwitch(true)}>
+          Continue on another device
         </Button>
       </div>
     </div>

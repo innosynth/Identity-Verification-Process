@@ -1,8 +1,9 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Camera, RotateCcw, Check, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface DocumentCaptureProps {
   documentType: {
@@ -20,8 +21,16 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
   const [stream, setStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | undefined>(undefined);
 
   const needsBackSide = documentType.id === "national_id" || documentType.id === "drivers_license";
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
 
   const startCamera = async () => {
     try {
@@ -67,10 +76,6 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
     }));
 
     stopCamera();
-
-    if (currentSide === "front" && needsBackSide) {
-      setCurrentSide("back");
-    }
   };
 
   const retakePhoto = () => {
@@ -80,20 +85,64 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
     }));
   };
 
-  const handleContinue = () => {
-    if (capturedImages.front && (!needsBackSide || capturedImages.back)) {
-      onCaptureComplete({
-        front: capturedImages.front,
-        back: capturedImages.back
-      });
-    }
+  const handlePreviewContinue = () => {
+    setShowPreview(false);
+    onCaptureComplete({
+      front: capturedImages.front!,
+      back: capturedImages.back
+    });
   };
 
   const isComplete = capturedImages.front && (!needsBackSide || capturedImages.back);
   const currentImage = capturedImages[currentSide];
 
+  if (showPreview) {
+    return (
+      <div className="w-full max-w-lg">
+        <div className="text-center mb-6">
+          <h2 className="text-2xl font-semibold mb-2">Review Your Document</h2>
+          <p className="text-muted-foreground">
+            Please review the captured images before submitting.
+          </p>
+        </div>
+        <Card className="p-6 mb-6">
+          <div className="space-y-4">
+            {capturedImages.front && (
+              <div>
+                <h3 className="font-medium mb-2">Front Side</h3>
+                <img src={capturedImages.front} alt="Front of document" className="rounded-lg w-full" />
+              </div>
+            )}
+            {capturedImages.back && (
+              <div>
+                <h3 className="font-medium mb-2">Back Side</h3>
+                <img src={capturedImages.back} alt="Back of document" className="rounded-lg w-full" />
+              </div>
+            )}
+          </div>
+        </Card>
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={() => setShowPreview(false)} className="flex-1">
+            Back
+          </Button>
+          <Button onClick={handlePreviewContinue} className="flex-1">
+            Continue
+          </Button>
+        </div>
+        <Dialog open={!!previewImage} onOpenChange={() => setPreviewImage(undefined)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Image Preview</DialogTitle>
+            </DialogHeader>
+            <img src={previewImage} alt="Preview" className="rounded-lg w-full" />
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-md mx-auto">
+    <div className="w-full max-w-lg">
       <div className="text-center mb-6">
         <h2 className="text-2xl font-semibold mb-2">
           Capture {documentType.name}
@@ -178,10 +227,15 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
           )}
 
           {currentImage && (
-            <Button onClick={retakePhoto} variant="outline" className="flex-1">
-              <RotateCcw className="w-4 h-4 mr-2" />
-              Retake
-            </Button>
+            <>
+              <Button onClick={retakePhoto} variant="outline" className="flex-1">
+                <RotateCcw className="w-4 h-4 mr-2" />
+                Retake
+              </Button>
+              <Button onClick={() => setPreviewImage(currentImage)} className="flex-1">
+                Preview
+              </Button>
+            </>
           )}
         </div>
       </Card>
@@ -206,11 +260,24 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
           Back
         </Button>
         <Button 
-          onClick={handleContinue}
-          disabled={!isComplete}
+          onClick={() => {
+            if (isComplete) {
+              setShowPreview(true);
+            } else {
+              if (needsBackSide && capturedImages.front && !capturedImages.back) {
+                setCurrentSide("back");
+              }
+              startCamera();
+            }
+          }}
           className="flex-1"
         >
-          {needsBackSide && !capturedImages.back ? "Continue to Back" : "Continue"}
+          {isComplete ? "Preview" : (needsBackSide && capturedImages.front ? "Capture Back" : "Capture Front")}
+        </Button>
+      </div>
+      <div className="mt-4 text-center">
+        <Button variant="link" onClick={() => (window as any).setShowDeviceSwitch(true)}>
+          Continue on another device
         </Button>
       </div>
     </div>

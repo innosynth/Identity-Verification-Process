@@ -62,30 +62,37 @@ export const VerificationStepper = ({ steps, currentStep }: VerificationStepperP
         </div>
       </div>
 
-      {/* Desktop stepper */}
-      <div className="hidden lg:flex items-center justify-between">
+      {/* Desktop stepper - Vertical */}
+      <div className="hidden lg:flex flex-col space-y-4">
         {steps.map((step, index) => (
-          <div key={step.id} className="flex-1 flex items-center">
-            <div className="flex flex-col items-center flex-1">
-              {/* Step circle */}
+          <div key={step.id} className="flex items-start">
+            {/* Step circle and line */}
+            <div className="flex flex-col items-center mr-4">
               <div
                 className={cn(
-                  "w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold transition-all duration-300",
+                  "w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-all duration-300",
                   "hover:scale-110",
-                  step.status === "completed" && "bg-verification-completed text-success-foreground animate-pulse-glow",
-                  step.status === "active" && "bg-verification-active text-primary-foreground ring-4 ring-primary/20 animate-pulse-glow",
+                  step.status === "completed" && "bg-verification-completed text-success-foreground",
+                  step.status === "active" && "bg-verification-active text-primary-foreground ring-4 ring-primary/20",
                   step.status === "inactive" && "bg-verification-inactive text-muted-foreground"
                 )}
               >
                 {step.status === "completed" ? (
-                  <Check className="w-6 h-6" />
+                  <Check className="w-5 h-5" />
                 ) : (
                   step.id
                 )}
               </div>
+              {index < steps.length - 1 && (
+                <div className={cn(
+                  "w-px h-12 mt-2 transition-colors duration-300",
+                  step.status === "completed" ? "bg-verification-completed" : "bg-verification-inactive"
+                )} />
+                )}
+              </div>
               
               {/* Step labels */}
-              <div className="mt-4 text-center">
+            <div className="pt-1">
                 <p
                   className={cn(
                     "text-sm font-semibold transition-colors duration-300",
@@ -100,21 +107,6 @@ export const VerificationStepper = ({ steps, currentStep }: VerificationStepperP
                   {step.description}
                 </p>
               </div>
-            </div>
-            
-            {/* Connector line */}
-            {index < steps.length - 1 && (
-              <div className="flex-1 px-6">
-                <div
-                  className={cn(
-                    "h-px w-full transition-all duration-500",
-                    step.status === "completed" 
-                      ? "bg-gradient-to-r from-verification-completed to-verification-completed" 
-                      : "bg-verification-inactive"
-                  )}
-                />
-              </div>
-            )}
           </div>
         ))}
       </div>

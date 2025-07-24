@@ -24,39 +24,6 @@ export const LandingPage = ({ onStartVerification }: LandingPageProps) => {
           </p>
         </div>
 
-        {/* Features Grid */}
-        <div className="grid md:grid-cols-3 gap-8 mb-12">
-          <Card className="p-6 text-center border-0 shadow-md hover:shadow-lg transition-shadow">
-            <div className="inline-flex items-center justify-center w-12 h-12 bg-primary/10 rounded-full mb-4">
-              <Smartphone className="w-6 h-6 text-primary" />
-            </div>
-            <h3 className="text-lg font-semibold mb-2">Mobile Optimized</h3>
-            <p className="text-muted-foreground">
-              Seamlessly works on any device with camera access for document and selfie capture.
-            </p>
-          </Card>
-
-          <Card className="p-6 text-center border-0 shadow-md hover:shadow-lg transition-shadow">
-            <div className="inline-flex items-center justify-center w-12 h-12 bg-accent/10 rounded-full mb-4">
-              <Clock className="w-6 h-6 text-accent" />
-            </div>
-            <h3 className="text-lg font-semibold mb-2">Quick Process</h3>
-            <p className="text-muted-foreground">
-              Complete verification in under 5 minutes with our streamlined process.
-            </p>
-          </Card>
-
-          <Card className="p-6 text-center border-0 shadow-md hover:shadow-lg transition-shadow">
-            <div className="inline-flex items-center justify-center w-12 h-12 bg-success/10 rounded-full mb-4">
-              <FileCheck className="w-6 h-6 text-success" />
-            </div>
-            <h3 className="text-lg font-semibold mb-2">Secure & Compliant</h3>
-            <p className="text-muted-foreground">
-              Bank-level security with encrypted uploads and compliance with privacy regulations.
-            </p>
-          </Card>
-        </div>
-
         {/* CTA Section */}
         <div className="text-center">
           <div className="bg-card border rounded-2xl p-8 max-w-md mx-auto shadow-lg">
