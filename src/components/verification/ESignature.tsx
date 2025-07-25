@@ -108,7 +108,48 @@ export const ESignature = ({ onSignatureComplete, onBack }: ESignatureProps) => 
     const reader = new FileReader();
     reader.onload = (event) => {
       const result = event.target?.result as string;
-      setUploadedSignature(result);
+      // Convert to PNG data URL using canvas, and resize if needed
+      const img = new window.Image();
+      img.onload = function () {
+        // Set max dimensions
+        const MAX_WIDTH = 512;
+        const MAX_HEIGHT = 256;
+        let width = img.width;
+        let height = img.height;
+        // Calculate new size while preserving aspect ratio
+        if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+          const widthRatio = MAX_WIDTH / width;
+          const heightRatio = MAX_HEIGHT / height;
+          const ratio = Math.min(widthRatio, heightRatio);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const pngDataUrl = canvas.toDataURL('image/png');
+          // Check size (e.g., 500KB = 500*1024 = 512000 bytes)
+          const base64Length = pngDataUrl.length - 'data:image/png;base64,'.length;
+          const fileSizeBytes = Math.ceil(base64Length * 3 / 4); // base64 to bytes
+          if (fileSizeBytes > 512000) {
+            alert('The signature image is too large after resizing (max 500KB). Please upload a smaller image.');
+            setUploadedSignature(null);
+            return;
+          }
+          setUploadedSignature(pngDataUrl);
+        } else {
+          // fallback: use original
+          setUploadedSignature(result);
+        }
+      };
+      img.onerror = function () {
+        // fallback: use original
+        setUploadedSignature(result);
+      };
+      img.src = result;
     };
     reader.readAsDataURL(file);
   };

@@ -14,6 +14,8 @@ import { PdfWithMetadataSignatures } from '../components/pdf/PdfWithSignatures';
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://identity-verification-process.vercel.app';
+//const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
 
 const PdfDropArea = ({ children, pdfDropRef, isOverPdf }: any) => {
   const { setNodeRef, isOver } = useDroppable({ id: 'pdf-drop-area' });
@@ -335,15 +337,133 @@ const SignPdf = () => {
   };
 
   // Modern UI starts here
+  const [activeSignatureTab, setActiveSignatureTab] = useState<'user' | 'preparer'>('user');
+  const [isMobile, setIsMobile] = useState(false);
+  const [tapToPlaceMode, setTapToPlaceMode] = useState<null | 'user' | 'preparer'>(null);
+  const [pendingSignatureData, setPendingSignatureData] = useState<SignatureData | null>(null);
+  const [pdfContainerWidth, setPdfContainerWidth] = useState<number | undefined>(undefined);
+  const pdfResponsiveContainerRef = useRef<HTMLDivElement>(null);
+
+  // Detect mobile
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth <= 640);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Responsive PDF width
+  useEffect(() => {
+    if (pdfResponsiveContainerRef.current) {
+      setPdfContainerWidth(pdfResponsiveContainerRef.current.offsetWidth);
+    }
+    const handleResize = () => {
+      if (pdfResponsiveContainerRef.current) {
+        setPdfContainerWidth(pdfResponsiveContainerRef.current.offsetWidth);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [pdfPreviewUrl]);
+
+  // Tap to place handler
+  function handleSignatureTapToPlace(type: 'user' | 'preparer', signatureData: SignatureData | null) {
+    if (!signatureData) return;
+    setTapToPlaceMode(type);
+    setPendingSignatureData(signatureData);
+  }
+
+  // PDF click handler for tap-to-place
+  function handlePdfClick(event: React.MouseEvent<HTMLDivElement, MouseEvent>) {
+    if (!isMobile || !tapToPlaceMode || !pendingSignatureData) return;
+    // Get click coordinates relative to PDF
+    const pdfRect = pdfPageRef.current?.getBoundingClientRect();
+    if (!pdfRect) return;
+    let x = event.clientX - pdfRect.left;
+    let y = event.clientY - pdfRect.top;
+    // Scale to PDF dimensions
+    if (pageDimensions.width > 0 && pageDimensions.height > 0 && pdfPageRef.current) {
+      const renderedWidth = pdfPageRef.current.clientWidth;
+      const renderedHeight = pdfPageRef.current.clientHeight;
+      x = (x / renderedWidth) * pageDimensions.width;
+      y = (y / renderedHeight) * pageDimensions.height;
+    }
+    // Clamp
+    const signatureWidth = 128;
+    const signatureHeight = 64;
+    const maxWidth = pageDimensions.width > 0 ? pageDimensions.width : pdfRect.width;
+    const maxHeight = pageDimensions.height > 0 ? pageDimensions.height : pdfRect.height;
+    x = Math.max(0, Math.min(x, maxWidth - signatureWidth));
+    y = Math.max(0, Math.min(y, maxHeight - signatureHeight));
+    setSignaturesOnPages(prev => [
+      ...prev,
+      { page: pageNumber, position: { x, y }, signature: pendingSignatureData },
+    ]);
+    setTapToPlaceMode(null);
+    setPendingSignatureData(null);
+  }
+
   return (
     <DndContext
       onDragEnd={handleDragEnd}
     >
       <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-blue-100 py-8 px-2 relative">
-        {/* Floating signature provider panels - left and right */}
-        {pdfPreviewUrl && !isLoading && (
+        {/* Sticky, horizontally scrollable signature header for mobile */}
+        {pdfPreviewUrl && !isLoading && isMobile && (
+          <div className="sticky top-0 z-40 w-full bg-white/95 border-b border-yellow-100 shadow-md overflow-x-auto flex flex-row gap-2 py-2 px-2" style={{ WebkitOverflowScrolling: 'touch' }}>
+            <div className="flex flex-row gap-2 min-w-[400px]">
+              <button
+                className={`flex-1 px-2 py-1 rounded-lg font-semibold text-xs ${tapToPlaceMode === 'user' ? 'bg-yellow-200 text-yellow-900' : 'bg-yellow-50 text-yellow-700'}`}
+                onClick={() => handleSignatureTapToPlace('user', userSignature)}
+                disabled={!userSignature}
+              >
+                User E-sign
+              </button>
+              <button
+                className={`flex-1 px-2 py-1 rounded-lg font-semibold text-xs ${tapToPlaceMode === 'preparer' ? 'bg-yellow-200 text-yellow-900' : 'bg-yellow-50 text-yellow-700'}`}
+                onClick={() => handleSignatureTapToPlace('preparer', preparerSignature)}
+                disabled={!preparerSignature}
+              >
+                Tax Preparer E-sign
+              </button>
+              {/* Show signature previews in header */}
+              <div className="flex flex-row gap-2 items-center">
+                {userSignature && <img src={userSignature.signature} alt="User Signature" className="w-16 h-8 object-contain border border-yellow-200 rounded bg-white" />}
+                {preparerSignature && <img src={preparerSignature.signature} alt="Preparer Signature" className="w-16 h-8 object-contain border border-yellow-200 rounded bg-white" />}
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Signature input for mobile (below sticky header) */}
+        {pdfPreviewUrl && !isLoading && isMobile && (
+          <div className="w-full flex flex-col gap-2 mb-2 mt-2">
+            {/* Show signature input for whichever is missing */}
+            {!userSignature && (
+              <DraggableSignature
+                id="user-provider"
+                label="User E-sign"
+                position={{ x: 0, y: 0 }}
+                onSign={setUserSignature}
+                sidebar={true}
+                signatureData={userSignature}
+              />
+            )}
+            {!preparerSignature && (
+              <DraggableSignature
+                id="preparer-provider"
+                label="Tax Preparer E-sign"
+                position={{ x: 0, y: 100 }}
+                onSign={setPreparerSignature}
+                sidebar={true}
+                signatureData={preparerSignature}
+              />
+            )}
+          </div>
+        )}
+        {/* Desktop signature sidebars (unchanged) */}
+        {pdfPreviewUrl && !isLoading && !isMobile && (
           <>
-            <div className="fixed left-8 top-1/2 -translate-y-1/2 flex flex-col gap-6 z-30 bg-white/90 border border-blue-100 rounded-2xl shadow-2xl p-4 animate-fade-in">
+            <div className="hidden sm:flex fixed left-8 top-1/2 -translate-y-1/2 flex-col gap-6 z-30 bg-white/90 border border-blue-100 rounded-2xl shadow-2xl p-4 animate-fade-in">
               <DraggableSignature
                 id="user-provider"
                 label="User E-sign"
@@ -353,7 +473,7 @@ const SignPdf = () => {
                 signatureData={userSignature}
               />
             </div>
-            <div className="fixed right-8 top-1/2 -translate-y-1/2 flex flex-col gap-6 z-30 bg-white/90 border border-blue-100 rounded-2xl shadow-2xl p-4 animate-fade-in">
+            <div className="hidden sm:flex fixed right-8 top-1/2 -translate-y-1/2 flex-col gap-6 z-30 bg-white/90 border border-blue-100 rounded-2xl shadow-2xl p-4 animate-fade-in">
               <DraggableSignature
                 id="preparer-provider"
                 label="Tax Preparer E-sign"
@@ -396,7 +516,7 @@ const SignPdf = () => {
               </div>
 
               {/* PDF Preview and Signature Area */}
-              <div className="w-full flex flex-col items-center relative">
+              <div className="w-full flex flex-col items-center relative px-0 sm:px-4">
                 {isLoading && (
                   <div className="flex flex-col items-center justify-center py-12">
                     <Loader2 className="h-10 w-10 text-blue-500 animate-spin mb-2" />
@@ -405,63 +525,72 @@ const SignPdf = () => {
                 )}
                 {pdfPreviewUrl && !isLoading && (
                   <div className="w-full flex flex-col items-center relative animate-fade-in">
-                    {/* PDF Preview Card with droppable */}
-                    <PdfDropArea pdfDropRef={pdfDropRef} isOverPdf={false}>
-                      <div ref={pdfPageRef} style={{ position: 'relative', width: '100%', height: '100%' }}>
-                        <Document
-                          file={pdfPreviewUrl}
-                          onLoadSuccess={onDocumentLoadSuccess}
-                          onLoadError={(error) => {
-                            setPdfError(error.message || 'Failed to load PDF file.');
-                            console.error(error);
-                          }}
-                          loading={<Loader2 className="mr-2 h-8 w-8 animate-spin" />}
-                          error={pdfError || 'Failed to load PDF file.'}
+                    {/* PDF Preview Card with droppable or tap-to-place */}
+                    <div
+                      className="w-full max-w-full overflow-x-auto"
+                      ref={pdfResponsiveContainerRef}
+                    >
+                      <PdfDropArea pdfDropRef={pdfDropRef} isOverPdf={false}>
+                        <div
+                          ref={pdfPageRef}
+                          style={{ position: 'relative', width: '100%', height: '100%', maxWidth: isMobile ? '100vw' : undefined }}
+                          className="mx-auto max-w-full sm:max-w-2xl"
+                          onClick={isMobile && tapToPlaceMode ? handlePdfClick : undefined}
                         >
-                          <Page
-                            pageNumber={pageNumber}
-                            width={pageDimensions.width > 0 ? pageDimensions.width : undefined}
-                            scale={1}
-                            onRenderSuccess={(page) => setPageDimensions({ width: page.width, height: page.height })}
-                          />
-                          {/* Render placed signatures for this page */}
-                          {signaturesOnPages.filter(sig => sig.page === pageNumber).map((sig, idx) => {
-                            // Calculate render position based on page dimensions
-                            const renderX = (sig.position.x / pageDimensions.width) * (pdfPageRef.current?.clientWidth || 1);
-                            const renderY = (sig.position.y / pageDimensions.height) * (pdfPageRef.current?.clientHeight || 1);
-                            
-                            return (
-                              <div
-                                key={idx}
-                                style={{ position: 'absolute', left: renderX, top: renderY, zIndex: 10 }}
-                                className="bg-white/90 border border-blue-200 rounded shadow p-2 flex flex-col items-center"
-                              >
-                                <img src={sig.signature.signature} alt="Signature" className="w-32 h-16 object-contain" />
-                                <div className="text-xs text-gray-500 mt-1">
-                                  <div><strong>Signed by:</strong> {sig.signature.name}</div>
-                                  <div><strong>IP:</strong> {sig.signature.ipAddress}</div>
-                                  <div><strong>Date:</strong> {new Date(sig.signature.timestamp).toLocaleString()}</div>
+                          <Document
+                            file={pdfPreviewUrl}
+                            onLoadSuccess={onDocumentLoadSuccess}
+                            onLoadError={(error) => {
+                              setPdfError(error.message || 'Failed to load PDF file.');
+                              console.error(error);
+                            }}
+                            loading={<Loader2 className="mr-2 h-8 w-8 animate-spin" />}
+                            error={pdfError || 'Failed to load PDF file.'}
+                          >
+                            <Page
+                              pageNumber={pageNumber}
+                              width={pdfContainerWidth || undefined}
+                              scale={1}
+                              onRenderSuccess={(page) => setPageDimensions({ width: page.width, height: page.height })}
+                            />
+                            {/* Render placed signatures for this page */}
+                            {signaturesOnPages.filter(sig => sig.page === pageNumber).map((sig, idx) => {
+                              // Calculate render position based on page dimensions
+                              const renderX = (sig.position.x / pageDimensions.width) * (pdfPageRef.current?.clientWidth || 1);
+                              const renderY = (sig.position.y / pageDimensions.height) * (pdfPageRef.current?.clientHeight || 1);
+                              return (
+                                <div
+                                  key={idx}
+                                  style={{ position: 'absolute', left: renderX, top: renderY, zIndex: 10 }}
+                                  className="bg-white/90 border border-blue-200 rounded shadow p-2 flex flex-col items-center"
+                                >
+                                  <img src={sig.signature.signature} alt="Signature" className="w-32 h-16 object-contain" />
+                                  <div className="text-xs text-gray-500 mt-1">
+                                    <div><strong>Signed by:</strong> {sig.signature.name}</div>
+                                    <div><strong>IP:</strong> {sig.signature.ipAddress}</div>
+                                    <div><strong>Date:</strong> {new Date(sig.signature.timestamp).toLocaleString()}</div>
+                                  </div>
+                                  <Button size="icon" variant="ghost" className="mt-1" onClick={() => handleRemoveSignature(idx)}>
+                                    ×
+                                  </Button>
                                 </div>
-                                <Button size="icon" variant="ghost" className="mt-1" onClick={() => handleRemoveSignature(idx)}>
-                                  ×
-                                </Button>
+                              );
+                            })}
+                          </Document>
+                          {/* DragOverlay for active drag */}
+                          <DragOverlay>
+                            {active && active.data?.current?.signatureData && (
+                              <div className="bg-yellow-100 border border-yellow-400 rounded shadow p-2 flex flex-col items-center">
+                                <img src={active.data.current.signatureData.signature} alt="Signature Preview" className="w-32 h-16 object-contain" />
+                                <div className="text-xs text-gray-500 mt-1">
+                                  <div><strong>Signed by:</strong> {active.data.current.signatureData.name}</div>
+                                </div>
                               </div>
-                            );
-                          })}
-                        </Document>
-                        {/* DragOverlay for active drag */}
-                        <DragOverlay>
-                          {active && active.data?.current?.signatureData && (
-                            <div className="bg-yellow-100 border border-yellow-400 rounded shadow p-2 flex flex-col items-center">
-                              <img src={active.data.current.signatureData.signature} alt="Signature Preview" className="w-32 h-16 object-contain" />
-                              <div className="text-xs text-gray-500 mt-1">
-                                <div><strong>Signed by:</strong> {active.data.current.signatureData.name}</div>
-                              </div>
-                            </div>
-                          )}
-                        </DragOverlay>
-                      </div>
-                    </PdfDropArea>
+                            )}
+                          </DragOverlay>
+                        </div>
+                      </PdfDropArea>
+                    </div>
                     {/* Page navigation */}
                     {numPages && (
                       <div className="flex items-center justify-center mt-4 gap-2">
