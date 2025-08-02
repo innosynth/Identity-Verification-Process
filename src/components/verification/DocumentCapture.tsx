@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import Tesseract from 'tesseract.js';
 
 interface DocumentCaptureProps {
   documentType: {
@@ -19,6 +20,9 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
   const [capturedImages, setCapturedImages] = useState<{ front?: string; back?: string }>({});
   const [isCapturing, setIsCapturing] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [extractedText, setExtractedText] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [nameMatchError, setNameMatchError] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -76,6 +80,50 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
     }));
 
     stopCamera();
+    processImageForText(imageDataUrl);
+  };
+
+  const processImageForText = async (imageUrl: string) => {
+    setIsProcessing(true);
+    try {
+      const recipientName = sessionStorage.getItem('recipientName') || 'Test Name';
+      const formData = new FormData();
+      formData.append('documentImage', dataURItoBlob(imageUrl));
+      formData.append('recipientName', recipientName);
+
+      const response = await fetch('http://localhost:3000/api/verify/document-name', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      setExtractedText(result.nameVerified ? 'Name verified' : 'Name mismatch');
+      setNameMatchError(!result.nameVerified);
+      sessionStorage.setItem('nameMatchError', (!result.nameVerified).toString());
+    } catch (error) {
+      console.error("Error processing image with backend API:", error);
+      setExtractedText("Error processing text.");
+      setNameMatchError(true);
+      sessionStorage.setItem('nameMatchError', 'true');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Helper function to convert data URI to Blob
+  const dataURItoBlob = (dataURI: string) => {
+    const byteString = atob(dataURI.split(',')[1]);
+    const mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ab], { type: mimeString });
   };
 
   const retakePhoto = () => {
@@ -151,6 +199,12 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
           {currentSide === "front" ? "Front" : "Back"} side
           {needsBackSide && ` (${currentSide === "front" ? "1" : "2"} of 2)`}
         </p>
+        {isProcessing && <p className="text-primary">Processing document...</p>}
+        {extractedText && !isProcessing && (
+          <p className="text-sm mt-2">
+            {nameMatchError ? <span className="text-red-500">Name mismatch detected. Please retry.</span> : <span className="text-green-500">Document verified successfully.</span>}
+          </p>
+        )}
       </div>
 
       {/* Instructions Card */}

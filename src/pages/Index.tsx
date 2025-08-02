@@ -40,10 +40,20 @@ interface DocumentType {
 
 interface VerificationData {
   country?: Country;
-  documentType?: DocumentType;
-  documentImages?: { front: string; back?: string };
+  documentType?: {
+    id: string;
+    name: string;
+    icon: string;
+  };
+  termsAccepted?: boolean;
+  documentImages?: {
+    front: string;
+    back?: string;
+  };
   selfieVideo?: Blob;
   signature?: { type: "drawn" | "uploaded"; data: string };
+  nameVerified?: boolean;
+  faceVerified?: boolean;
 }
 
 const steps = [
@@ -61,10 +71,12 @@ const Index = () => {
   const [verificationData, setVerificationData] = useState<VerificationData>({});
   const [showDeviceSwitch, setShowDeviceSwitch] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [recipientName, setRecipientName] = useState<string>('');
 
   useEffect(() => {
     const savedStep = sessionStorage.getItem("currentStep");
     const savedData = sessionStorage.getItem("verificationData");
+    const savedName = sessionStorage.getItem("recipientName");
     if (savedStep) {
       setCurrentStep(savedStep as VerificationStep);
     }
@@ -77,6 +89,9 @@ const Index = () => {
       }
       setVerificationData(parsedData);
     }
+    if (savedName) {
+      setRecipientName(savedName);
+    }
   }, []);
 
   useEffect(() => {
@@ -84,7 +99,8 @@ const Index = () => {
     delete dataToSave.selfieVideo; // Do not store the selfie video in sessionStorage
     sessionStorage.setItem("currentStep", currentStep);
     sessionStorage.setItem("verificationData", JSON.stringify(dataToSave));
-  }, [currentStep, verificationData]);
+    sessionStorage.setItem("recipientName", recipientName);
+  }, [currentStep, verificationData, recipientName]);
 
   const getStepStatus = (stepId: number): "completed" | "active" | "inactive" => {
     const stepMap: Record<VerificationStep, number> = {
@@ -137,18 +153,219 @@ const Index = () => {
   };
 
   const handleDocumentCapture = (images: { front: string; back?: string }) => {
-    setVerificationData(prev => ({ ...prev, documentImages: images }));
-    setCurrentStep("selfie-capture");
+    setVerificationData(prev => ({
+      ...prev,
+      documentImages: images,
+      nameVerified: false // Reset verification status
+    }));
+    // Store document image for face matching later
+    sessionStorage.setItem('documentFrontImage', images.front);
+    // Check name verification status from session storage (updated by DocumentCapture component)
+    setTimeout(async () => {
+      const nameVerified = sessionStorage.getItem('nameMatchError') !== 'true';
+      setVerificationData(prev => ({
+        ...prev,
+        nameVerified
+      }));
+      if (nameVerified) {
+        // Update verification status in backend
+        const envelopeId = sessionStorage.getItem('envelopeId');
+        if (envelopeId) {
+          try {
+            const response = await fetch(`http://localhost:3000/api/envelope/${envelopeId}/verify`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ nameVerified, faceVerified: false }),
+            });
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const result = await response.json();
+            console.log('Verification status updated:', result);
+          } catch (error) {
+            console.error('Error updating verification status:', error);
+          }
+        }
+        setCurrentStep("selfie-capture");
+      } else {
+        alert('Name mismatch detected. Please retry with the correct document.');
+        setCurrentStep("document-capture"); // Restart document capture
+      }
+    }, 1000); // Delay to simulate processing
   };
 
   const handleSelfieCapture = (videoBlob: Blob) => {
-    setVerificationData(prev => ({ ...prev, selfieVideo: videoBlob }));
-    setCurrentStep("signature");
+    setVerificationData(prev => ({
+      ...prev,
+      selfieVideo: videoBlob,
+      faceVerified: false // Reset verification status
+    }));
+    // Check face verification status from session storage (updated by SelfieCapture component)
+    setTimeout(async () => {
+      const faceVerified = sessionStorage.getItem('faceMatchResult') === 'true';
+      setVerificationData(prev => ({
+        ...prev,
+        faceVerified
+      }));
+      if (faceVerified && verificationData.nameVerified) {
+        // Update verification status in backend
+        const envelopeId = sessionStorage.getItem('envelopeId');
+        if (envelopeId) {
+          try {
+            const response = await fetch(`http://localhost:3000/api/envelope/${envelopeId}/verify`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ nameVerified: verificationData.nameVerified, faceVerified }),
+            });
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const result = await response.json();
+            console.log('Verification status updated:', result);
+            if (result.status === 'verified') {
+              createEnvelope(); // Keep frontend envelope creation for now
+              // Prepare envelope for signing
+              const prepareResponse = await fetch(`http://localhost:3000/api/envelope/${envelopeId}/prepare`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              });
+              if (!prepareResponse.ok) {
+                throw new Error(`HTTP error preparing envelope! status: ${prepareResponse.status}`);
+              }
+              const prepareResult = await prepareResponse.json();
+              console.log('Envelope prepared for signing:', prepareResult);
+              setCurrentStep("signature");
+            } else {
+              throw new Error('Verification status not updated to verified');
+            }
+          } catch (error) {
+            console.error('Error updating verification status:', error);
+            alert('Failed to update verification status. Please retry.');
+            setCurrentStep("selfie-capture");
+          }
+        } else {
+          alert('No envelope ID found. Please restart the process.');
+          setCurrentStep("landing");
+        }
+      } else {
+        alert('Face verification failed. Please retry.');
+        setCurrentStep("selfie-capture"); // Restart selfie capture
+      }
+    }, 1000); // Delay to simulate processing
+  };
+
+  const createEnvelope = () => {
+    const uploadedDocs = sessionStorage.getItem('uploadedDocuments');
+    if (uploadedDocs) {
+      const documents = JSON.parse(uploadedDocs);
+      const envelope = {
+        id: `ENV-${Date.now()}`,
+        documents,
+        recipientName: sessionStorage.getItem('recipientName') || 'Unknown',
+        recipientEmail: sessionStorage.getItem('recipientEmail') || 'Unknown',
+        status: 'pending'
+      };
+      sessionStorage.setItem('envelope', JSON.stringify(envelope));
+      console.log('Envelope created:', envelope);
+    } else {
+      console.error('No uploaded documents found for envelope creation');
+    }
   };
 
   const handleSignatureComplete = (signature: { type: "drawn" | "uploaded"; data: string }) => {
     setVerificationData(prev => ({ ...prev, signature }));
-    setCurrentStep("complete");
+    // Update envelope status to signed
+    const envelopeId = sessionStorage.getItem('envelopeId');
+    if (envelopeId) {
+      fetch(`http://localhost:3000/api/envelope/${envelopeId}/status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          status: 'signed',
+          signatureType: signature.type,
+          signatureData: signature.data
+        }),
+      })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(result => {
+          console.log('Envelope status updated to signed:', result);
+          setCurrentStep("complete");
+        })
+        .catch(error => {
+          console.error('Error updating envelope status:', error);
+          alert('Failed to update signing status. Please try again.');
+        });
+    } else {
+      alert('No envelope ID found. Please restart the process.');
+      setCurrentStep("landing");
+    }
+  };
+
+  const handleSignLaterOrDecline = (reason: 'later' | 'decline') => {
+    // Simulate DocuSign 'signing incomplete' event
+    const envelopeId = sessionStorage.getItem('envelopeId');
+    if (envelopeId) {
+      fetch(`http://localhost:3000/api/envelope/${envelopeId}/status`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          status: reason === 'later' ? 'pending_later' : 'declined'
+        }),
+      })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(result => {
+          console.log(`Envelope status updated to ${result.status}:`, result);
+          alert(reason === 'later' ? 'You have chosen to sign later. You will need to restart the process.' : 'You have declined to sign. You will need to restart the process.');
+          // Redirect to an earlier step or notify the application (simulated here by resetting to landing)
+          setCurrentStep("landing");
+          // Clear some session data to simulate a reset, but keep recipient info
+          const recipientName = sessionStorage.getItem('recipientName');
+          const recipientEmail = sessionStorage.getItem('recipientEmail');
+          const uploadedDocuments = sessionStorage.getItem('uploadedDocuments');
+          sessionStorage.clear();
+          if (recipientName) sessionStorage.setItem('recipientName', recipientName);
+          if (recipientEmail) sessionStorage.setItem('recipientEmail', recipientEmail);
+          if (uploadedDocuments) sessionStorage.setItem('uploadedDocuments', uploadedDocuments);
+          setVerificationData({});
+        })
+        .catch(error => {
+          console.error('Error updating envelope status:', error);
+          alert('Failed to update status. Please try again.');
+          setCurrentStep("signature");
+        });
+    } else {
+      alert('No envelope ID found. Please restart the process.');
+      setCurrentStep("landing");
+      // Clear some session data to simulate a reset, but keep recipient info
+      const recipientName = sessionStorage.getItem('recipientName');
+      const recipientEmail = sessionStorage.getItem('recipientEmail');
+      const uploadedDocuments = sessionStorage.getItem('uploadedDocuments');
+      sessionStorage.clear();
+      if (recipientName) sessionStorage.setItem('recipientName', recipientName);
+      if (recipientEmail) sessionStorage.setItem('recipientEmail', recipientEmail);
+      if (uploadedDocuments) sessionStorage.setItem('uploadedDocuments', uploadedDocuments);
+      setVerificationData({});
+    }
   };
 
   const handleRestart = () => {
@@ -156,30 +373,14 @@ const Index = () => {
     setCurrentStep("landing");
     sessionStorage.removeItem("currentStep");
     sessionStorage.removeItem("verificationData");
+    sessionStorage.removeItem("recipientName");
   };
 
   const handleBack = () => {
-    switch (currentStep) {
-      case "country":
-        setCurrentStep("landing");
-        break;
-      case "document-type":
-        setCurrentStep("country");
-        break;
-      case "terms":
-        setCurrentStep("document-type");
-        break;
-      case "document-capture":
-        setCurrentStep("terms");
-        break;
-      case "selfie-capture":
-        setCurrentStep("document-capture");
-        break;
-      case "signature":
-        setCurrentStep("selfie-capture");
-        break;
-      default:
-        break;
+    const stepOrder = ["landing", "country", "document-type", "terms", "document-capture", "selfie-capture", "signature", "complete"];
+    const currentIndex = stepOrder.indexOf(currentStep);
+    if (currentIndex > 0) {
+      setCurrentStep(stepOrder[currentIndex - 1] as VerificationStep);
     }
   };
 
@@ -236,9 +437,9 @@ const Index = () => {
               />
             )}
 
-            {currentStep === "document-capture" && verificationData.documentType && (
+            {currentStep === "document-capture" && (
               <DocumentCapture
-                documentType={verificationData.documentType}
+                documentType={verificationData.documentType!}
                 onCaptureComplete={handleDocumentCapture}
                 onBack={handleBack}
               />
@@ -255,6 +456,8 @@ const Index = () => {
               <ESignature
                 onSignatureComplete={handleSignatureComplete}
                 onBack={handleBack}
+                onSignLater={() => handleSignLaterOrDecline('later')}
+                onDecline={() => handleSignLaterOrDecline('decline')}
               />
             )}
 

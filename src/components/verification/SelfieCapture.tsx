@@ -3,6 +3,7 @@ import { Video, Play, Pause, RotateCcw, Check, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import * as faceapi from 'face-api.js';
 
 interface SelfieCaptureProps {
   onCaptureComplete: (videoBlob: Blob) => void;
@@ -16,6 +17,9 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [isCameraInitializing, setIsCameraInitializing] = useState(false);
+  const [isFaceMatching, setIsFaceMatching] = useState(false);
+  const [faceMatchResult, setFaceMatchResult] = useState<boolean | null>(null);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -25,6 +29,18 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
   const RECORDING_DURATION = 5; // seconds
 
   useEffect(() => {
+    const loadModels = async () => {
+      try {
+        await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+        await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+        await faceapi.nets.faceRecognitionNet.loadFromUri('/models');
+        setModelsLoaded(true);
+        console.log('Face-api.js models loaded');
+      } catch (error) {
+        console.error('Error loading face-api.js models:', error);
+      }
+    };
+    loadModels();
     return () => {
       stopCamera();
     };
@@ -73,6 +89,9 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
       setRecordedBlob(blob);
       setHasRecorded(true);
       stopCamera();
+      if (modelsLoaded) {
+        performFaceMatching(blob);
+      }
     };
 
     mediaRecorder.start();
@@ -122,6 +141,74 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
 
   const progressPercentage = (recordingTime / RECORDING_DURATION) * 100;
 
+  const performFaceMatching = async (videoBlob: Blob) => {
+    setIsFaceMatching(true);
+    try {
+      // Extract a frame from the video for face detection
+      const videoUrl = URL.createObjectURL(videoBlob);
+      const video = document.createElement('video');
+      video.src = videoUrl;
+      await new Promise(resolve => video.onloadedmetadata = resolve);
+      video.currentTime = 1; // Get a frame from 1 second in
+      await new Promise(resolve => video.onseeked = resolve);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0);
+        const selfieImage = canvas.toDataURL('image/jpeg');
+
+        // Load document image from session storage
+        const documentImageData = sessionStorage.getItem('documentFrontImage') || '';
+        if (!documentImageData) {
+          console.error('No document image found for matching');
+          setFaceMatchResult(false);
+          sessionStorage.setItem('faceMatchResult', 'false');
+          setIsFaceMatching(false);
+          return;
+        }
+
+        // Send images to backend for facial recognition
+        const formData = new FormData();
+        formData.append('selfieImage', dataURItoBlob(selfieImage));
+        formData.append('documentImage', dataURItoBlob(documentImageData));
+
+        const response = await fetch('http://localhost:3000/api/verify/face', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        setFaceMatchResult(result.faceVerified);
+        sessionStorage.setItem('faceMatchResult', result.faceVerified.toString());
+      }
+    } catch (error) {
+      console.error('Error performing face matching with backend API:', error);
+      setFaceMatchResult(false);
+      sessionStorage.setItem('faceMatchResult', 'false');
+    } finally {
+      setIsFaceMatching(false);
+    }
+  };
+
+  // Helper function to convert data URI to Blob
+  const dataURItoBlob = (dataURI: string) => {
+    const byteString = atob(dataURI.split(',')[1]);
+    const mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ab], { type: mimeString });
+  };
+
   return (
     <div className="max-w-lg mx-auto">
       <div className="text-center mb-6">
@@ -129,6 +216,12 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
         <p className="text-muted-foreground">
           Record a {RECORDING_DURATION}-second video of yourself for verification
         </p>
+        {isFaceMatching && <p className="text-primary">Processing face match...</p>}
+        {faceMatchResult !== null && !isFaceMatching && (
+          <p className="text-sm mt-2">
+            {faceMatchResult ? <span className="text-green-500">Face match successful!</span> : <span className="text-red-500">Face match failed. Please retry.</span>}
+          </p>
+        )}
       </div>
 
       {/* Instructions Card */}

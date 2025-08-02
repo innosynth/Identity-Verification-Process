@@ -1,324 +1,209 @@
 import { useState, useRef, useEffect } from "react";
-import { PenTool, Upload, RotateCcw, Download, Check } from "lucide-react";
+import { PenTool, Upload, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface ESignatureProps {
-  onSignatureComplete: (signatureData: { type: "drawn" | "uploaded"; data: string }) => void;
+  onSignatureComplete: (signature: { type: "drawn" | "uploaded"; data: string }) => void;
   onBack: () => void;
+  onSignLater: () => void;
+  onDecline: () => void;
 }
 
-export const ESignature = ({ onSignatureComplete, onBack }: ESignatureProps) => {
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [hasSignature, setHasSignature] = useState(false);
-  const [uploadedSignature, setUploadedSignature] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"draw" | "upload">("draw");
-  
+export const ESignature = ({ onSignatureComplete, onBack, onSignLater, onDecline }: ESignatureProps) => {
+  const [signatureType, setSignatureType] = useState<"drawn" | "uploaded">("drawn");
+  const [signatureData, setSignatureData] = useState<string | null>(null);
+  const [isSigning, setIsSigning] = useState(false);
+  const [envelope, setEnvelope] = useState<any>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    // Set canvas size
-    canvas.width = canvas.offsetWidth * 2;
-    canvas.height = canvas.offsetHeight * 2;
-    ctx.scale(2, 2);
-
-    // Set drawing styles
-    ctx.strokeStyle = "#000000";
-    ctx.lineWidth = 2;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
-    // Clear canvas with white background
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const envelopeData = sessionStorage.getItem('envelope');
+    if (envelopeData) {
+      setEnvelope(JSON.parse(envelopeData));
+    }
   }, []);
 
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    setIsDrawing(true);
-    draw(e);
-  };
-
-  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-
-    const rect = canvas.getBoundingClientRect();
-    let clientX, clientY;
-
-    if ('touches' in e) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
+  useEffect(() => {
+    if (signatureType === "drawn" && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 2;
+      }
     }
+  }, [signatureType]);
 
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-
-    ctx.lineTo(x, y);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    
-    setHasSignature(true);
-  };
-
-  const stopDrawing = () => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
-    
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return;
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
+    const ctx = canvas.getContext("2d");
     if (ctx) {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
       ctx.beginPath();
+      ctx.moveTo(x, y);
+      setIsSigning(true);
+
+      const draw = (moveEvent: MouseEvent) => {
+        if (!isSigning) return;
+        const newRect = canvas.getBoundingClientRect();
+        const newX = moveEvent.clientX - newRect.left;
+        const newY = moveEvent.clientY - newRect.top;
+        ctx.lineTo(newX, newY);
+        ctx.stroke();
+      };
+
+      const stop = () => {
+        setIsSigning(false);
+        ctx.closePath();
+        const dataUrl = canvas.toDataURL("image/png");
+        setSignatureData(dataUrl);
+        window.removeEventListener("mousemove", draw);
+        window.removeEventListener("mouseup", stop);
+      };
+
+      window.addEventListener("mousemove", draw);
+      window.addEventListener("mouseup", stop);
     }
-  };
-
-  const clearCanvas = () => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    setHasSignature(false);
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      alert("Please upload an image file");
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      // Convert to PNG data URL using canvas, and resize if needed
-      const img = new window.Image();
-      img.onload = function () {
-        // Set max dimensions
-        const MAX_WIDTH = 512;
-        const MAX_HEIGHT = 256;
-        let width = img.width;
-        let height = img.height;
-        // Calculate new size while preserving aspect ratio
-        if (width > MAX_WIDTH || height > MAX_HEIGHT) {
-          const widthRatio = MAX_WIDTH / width;
-          const heightRatio = MAX_HEIGHT / height;
-          const ratio = Math.min(widthRatio, heightRatio);
-          width = Math.round(width * ratio);
-          height = Math.round(height * ratio);
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          const pngDataUrl = canvas.toDataURL('image/png');
-          // Check size (e.g., 500KB = 500*1024 = 512000 bytes)
-          const base64Length = pngDataUrl.length - 'data:image/png;base64,'.length;
-          const fileSizeBytes = Math.ceil(base64Length * 3 / 4); // base64 to bytes
-          if (fileSizeBytes > 512000) {
-            alert('The signature image is too large after resizing (max 500KB). Please upload a smaller image.');
-            setUploadedSignature(null);
-            return;
-          }
-          setUploadedSignature(pngDataUrl);
-        } else {
-          // fallback: use original
-          setUploadedSignature(result);
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target && event.target.result) {
+          setSignatureData(event.target.result as string);
         }
       };
-      img.onerror = function () {
-        // fallback: use original
-        setUploadedSignature(result);
-      };
-      img.src = result;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const getSignatureData = () => {
-    if (activeTab === "draw" && hasSignature) {
-      const canvas = canvasRef.current;
-      if (canvas) {
-        return {
-          type: "drawn" as const,
-          data: canvas.toDataURL("image/png")
-        };
-      }
-    } else if (activeTab === "upload" && uploadedSignature) {
-      return {
-        type: "uploaded" as const,
-        data: uploadedSignature
-      };
+      reader.readAsDataURL(file);
     }
-    return null;
   };
 
-  const handleContinue = () => {
-    const signatureData = getSignatureData();
+  const handleSignatureComplete = () => {
     if (signatureData) {
-      onSignatureComplete(signatureData);
+      onSignatureComplete({
+        type: signatureType,
+        data: signatureData
+      });
+      // Update envelope status to signed
+      if (envelope) {
+        const updatedEnvelope = { ...envelope, status: 'signed', signature: signatureData };
+        sessionStorage.setItem('envelope', JSON.stringify(updatedEnvelope));
+      }
     }
   };
-
-  const canContinue = (activeTab === "draw" && hasSignature) || (activeTab === "upload" && uploadedSignature);
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-lg mx-auto">
       <div className="text-center mb-6">
-        <h2 className="text-2xl font-semibold mb-2">Electronic Signature</h2>
+        <h2 className="text-2xl font-semibold mb-2">Add Your Signature</h2>
         <p className="text-muted-foreground">
-          Create your digital signature to complete the verification process
+          Sign the documents in your envelope
         </p>
+        {envelope && envelope.documents && (
+          <p className="text-sm text-primary mt-2">Documents to sign: {envelope.documents.length}</p>
+        )}
       </div>
 
       <Card className="p-6 mb-6">
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "draw" | "upload")}>
-          <TabsList className="grid w-full grid-cols-2 mb-6">
-            <TabsTrigger value="draw" className="flex items-center">
-              <PenTool className="w-4 h-4 mr-2" />
-              Draw Signature
-            </TabsTrigger>
-            <TabsTrigger value="upload" className="flex items-center">
-              <Upload className="w-4 h-4 mr-2" />
-              Upload Image
-            </TabsTrigger>
-          </TabsList>
+        <div className="flex justify-center space-x-4 mb-6">
+          <Button
+            variant={signatureType === "drawn" ? "default" : "outline"}
+            onClick={() => setSignatureType("drawn")}
+          >
+            <PenTool className="w-4 h-4 mr-2" />
+            Draw Signature
+          </Button>
+          <Button
+            variant={signatureType === "uploaded" ? "default" : "outline"}
+            onClick={() => setSignatureType("uploaded")}
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            Upload Signature
+          </Button>
+        </div>
 
-          <TabsContent value="draw" className="space-y-4">
-            <div className="border-2 border-dashed border-border rounded-lg p-4">
-              <canvas
-                ref={canvasRef}
-                className="w-full h-32 border border-border rounded cursor-crosshair touch-none"
-                onMouseDown={startDrawing}
-                onMouseMove={draw}
-                onMouseUp={stopDrawing}
-                onMouseLeave={stopDrawing}
-                onTouchStart={startDrawing}
-                onTouchMove={draw}
-                onTouchEnd={stopDrawing}
-              />
-              <p className="text-sm text-muted-foreground text-center mt-2">
-                Draw your signature above using your mouse or finger
-              </p>
-            </div>
-            
-            <div className="flex gap-2">
-              <Button 
-                onClick={clearCanvas} 
-                variant="outline" 
-                size="sm"
-                disabled={!hasSignature}
-                className="flex-1"
-              >
-                <RotateCcw className="w-4 h-4 mr-2" />
-                Clear
-              </Button>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="upload" className="space-y-4">
-            <div 
-              className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-primary transition-colors"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              {uploadedSignature ? (
-                <div className="space-y-4">
-                  <img 
-                    src={uploadedSignature} 
-                    alt="Uploaded signature" 
-                    className="max-h-20 mx-auto"
-                  />
-                  <div className="flex items-center justify-center text-success">
-                    <Check className="w-4 h-4 mr-2" />
-                    Signature uploaded successfully
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
-                    <Upload className="w-6 h-6 text-primary" />
-                  </div>
-                  <div>
-                    <p className="font-medium">Upload Signature Image</p>
-                    <p className="text-sm text-muted-foreground">
-                      Choose a PNG or JPG file of your signature
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-            
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/jpg"
-              onChange={handleFileUpload}
-              className="hidden"
+        {signatureType === "drawn" ? (
+          <div className="border border-dashed border-muted rounded-lg p-4 relative bg-white">
+            <canvas
+              ref={canvasRef}
+              onMouseDown={startDrawing}
+              width={500}
+              height={200}
+              className="w-full h-full touch-none"
             />
-            
-            {uploadedSignature && (
-              <Button 
-                onClick={() => {
-                  setUploadedSignature(null);
-                  if (fileInputRef.current) {
-                    fileInputRef.current.value = "";
-                  }
-                }}
-                variant="outline" 
-                size="sm"
-                className="w-full"
-              >
-                <RotateCcw className="w-4 h-4 mr-2" />
-                Choose Different Image
-              </Button>
+            {!signatureData && (
+              <p className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm pointer-events-none">
+                Click and drag to draw your signature
+              </p>
             )}
-          </TabsContent>
-        </Tabs>
+          </div>
+        ) : (
+          <div className="border border-dashed border-muted rounded-lg p-8 text-center bg-white">
+            {!signatureData ? (
+              <>
+                <Upload className="w-6 h-6 text-muted-foreground mx-auto mb-2" />
+                <p className="text-muted-foreground mb-4">Upload a saved signature image</p>
+                <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+                  Choose File
+                </Button>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="hidden"
+                  accept="image/*"
+                  onChange={handleFileUpload}
+                />
+              </>
+            ) : (
+              <img src={signatureData} alt="Uploaded Signature" className="max-h-40 mx-auto" />
+            )}
+          </div>
+        )}
+
+        {signatureData && (
+          <div className="mt-4 flex justify-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setSignatureData(null);
+                if (signatureType === "uploaded" && fileInputRef.current) {
+                  fileInputRef.current.value = "";
+                }
+              }}
+            >
+              Clear
+            </Button>
+          </div>
+        )}
       </Card>
 
-      {/* Preview Section */}
-      {canContinue && (
-        <Card className="p-4 mb-6 bg-verification-bg">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-success rounded-full flex items-center justify-center flex-shrink-0">
-              <Check className="w-4 h-4 text-success-foreground" />
-            </div>
-            <div>
-              <p className="font-medium text-sm">Signature Ready</p>
-              <p className="text-sm text-muted-foreground">
-                Your signature will be attached to your verification documents
-              </p>
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* Action Buttons */}
       <div className="flex gap-3">
         <Button variant="outline" onClick={onBack} className="flex-1">
           Back
         </Button>
-        <Button onClick={handleContinue} disabled={!canContinue} className="flex-1">
-          Complete Verification
+        <Button
+          onClick={handleSignatureComplete}
+          disabled={!signatureData}
+          className="flex-1"
+        >
+          <Check className="w-4 h-4 mr-2" />
+          Apply Signature
+        </Button>
+      </div>
+      <div className="mt-4 text-center space-x-4">
+        <Button variant="link" onClick={onSignLater}>
+          Sign Later
+        </Button>
+        <Button variant="link" onClick={onDecline} className="text-red-500">
+          Decline to Sign
         </Button>
       </div>
       <div className="mt-4 text-center">
