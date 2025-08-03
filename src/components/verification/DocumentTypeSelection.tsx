@@ -50,14 +50,14 @@ export const DocumentTypeSelection = ({ onDocumentTypeSelect, onBack }: Document
         
         {/* Header */}
         <div className="text-center mb-8 lg:mb-12">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary/10 rounded-full mb-6 animate-pulse-glow">
-            <Shield className="w-8 h-8 text-primary animate-float" />
+          <div className="flex items-center justify-center mb-6">
+            <Shield className="w-8 h-8 text-primary animate-float mr-4" />
+            <h1 className="text-3xl lg:text-4xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+              Choose Document Type
+            </h1>
           </div>
-          <h1 className="text-3xl lg:text-4xl font-bold mb-4 bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-            Choose Document Type
-          </h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            Select the type of government-issued ID you'd like to use for verification. 
+            Select the type of government-issued ID you'd like to use for verification.
             All documents are processed securely and with bank-level encryption.
           </p>
         </div>

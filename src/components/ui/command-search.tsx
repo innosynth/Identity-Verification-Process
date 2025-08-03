@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Search, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,29 @@ export const CommandSearch = ({
 }: CommandSearchProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+
+    const handleEscKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscKey);
+
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscKey);
+    };
+  }, []);
 
   const filteredItems = useMemo(() => {
     if (!search) return items;
@@ -38,7 +61,7 @@ export const CommandSearch = ({
   const selectedItem = items.find(item => item.id === selectedId);
 
   return (
-    <div className={cn("relative", className)}>
+    <div className={cn("relative", className)} ref={containerRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         className={cn(

@@ -3,7 +3,6 @@ import { Globe, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CommandSearch } from "@/components/ui/command-search";
-import { cn } from "@/lib/utils";
 
 interface Country {
   code: string;

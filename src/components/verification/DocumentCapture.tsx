@@ -146,7 +146,7 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
 
   if (showPreview) {
     return (
-      <div className="w-full max-w-lg">
+      <div className="w-full max-w-2xl">
         <div className="text-center mb-6">
           <h2 className="text-2xl font-semibold mb-2">Review Your Document</h2>
           <p className="text-muted-foreground">
@@ -154,16 +154,16 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
           </p>
         </div>
         <Card className="p-6 mb-6">
-          <div className="space-y-4">
+          <div className="flex gap-4">
             {capturedImages.front && (
-              <div>
-                <h3 className="font-medium mb-2">Front Side</h3>
+              <div className="flex-1">
+                <h3 className="font-medium mb-2 text-center">Front Side</h3>
                 <img src={capturedImages.front} alt="Front of document" className="rounded-lg w-full" />
               </div>
             )}
             {capturedImages.back && (
-              <div>
-                <h3 className="font-medium mb-2">Back Side</h3>
+              <div className="flex-1">
+                <h3 className="font-medium mb-2 text-center">Back Side</h3>
                 <img src={capturedImages.back} alt="Back of document" className="rounded-lg w-full" />
               </div>
             )}
@@ -285,9 +285,6 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
               <Button onClick={retakePhoto} variant="outline" className="flex-1">
                 <RotateCcw className="w-4 h-4 mr-2" />
                 Retake
-              </Button>
-              <Button onClick={() => setPreviewImage(currentImage)} className="flex-1">
-                Preview
               </Button>
             </>
           )}
