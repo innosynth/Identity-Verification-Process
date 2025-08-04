@@ -2,20 +2,29 @@ import { useState, useEffect, useRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-import { Loader2, UploadCloud, FileCheck2, Signature as SignatureIcon } from 'lucide-react';
+import { Loader2, UploadCloud, FileCheck2 } from 'lucide-react';
 import { DndContext, DragOverlay, useDroppable, useDndContext } from '@dnd-kit/core';
 import { DraggableSignature, SignatureData } from '../components/pdf/DraggableSignature';
 import { Button } from '../components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
-import { PDFViewer, pdf } from '@react-pdf/renderer';
-import { PdfWithMetadataSignatures } from '../components/pdf/PdfWithSignatures';
+import React from 'react';
 import { useParams, useLocation } from 'react-router-dom';
+
+interface SignPdfProps {
+  id?: string;
+  token?: string;
+  onBack?: () => void;
+  onComplete?: () => void;
+}
 
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 //const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+// Helper to get API key
+const API_KEY = import.meta.env.VITE_ADMIN_API_KEY || 'api_a44ed8187b7eefb29518361d3e2eda69';
 
 
 const PdfDropArea = ({ children, pdfDropRef, isOverPdf }: any) => {
@@ -34,11 +43,12 @@ const PdfDropArea = ({ children, pdfDropRef, isOverPdf }: any) => {
   );
 };
 
-const SignPdf = () => {
-  const { id } = useParams<{ id: string }>(); // Read envelope ID from URL path
+const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onBack, onComplete }) => {
+  const params = useParams<{ id: string }>();
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
-  const token = queryParams.get('token') || '';
+  const id = propId || params.id || '';
+  const token = propToken || queryParams.get('token') || '';
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -64,6 +74,15 @@ const SignPdf = () => {
   const pdfPageRef = useRef<HTMLDivElement>(null);
   // Add a ref for the actual PDF canvas
   const pdfCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Add state for error messages
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Add state for submission completion and signed PDF URL
+  const [submissionComplete, setSubmissionComplete] = useState(false);
+  const [signedPdfUrl, setSignedPdfUrl] = useState<string | null>(null);
+  // Add state for consent
+  const [consentGiven, setConsentGiven] = useState(false);
+  // Add state for active signature role
+  const [activeRole, setActiveRole] = useState<'user' | 'preparer'>('user');
 
   // Load session data based on ID and token
   useEffect(() => {
@@ -71,7 +90,7 @@ const SignPdf = () => {
       setIsLoading(true);
       fetch(`${API_URL}/api/signing-session/${id}`, {
         headers: {
-          'x-api-key': import.meta.env.VITE_API_KEY || 'your-api-key'
+          'x-api-key': API_KEY
         }
       })
         .then(response => {
@@ -96,8 +115,7 @@ const SignPdf = () => {
               .then(blob => {
                 const file = new File([blob], session.documents[0].filename, { type: 'application/pdf' });
                 setPdfFile(file);
-                const previewUrl = URL.createObjectURL(file);
-                setPdfPreviewUrl(previewUrl);
+                setPdfPreviewUrl(docUrl); // Use backend URL for persistent viewing
                 setPdfUrl(docUrl);
                 setIsLoading(false);
               });
@@ -142,12 +160,10 @@ const SignPdf = () => {
     const file = event.target.files?.[0];
     if (file) {
       if (file.type !== 'application/pdf') {
-        alert('Please upload a valid PDF file.');
+        setErrorMessage('Please upload a valid PDF file.');
         return;
       }
       setPdfFile(file);
-      const previewUrl = URL.createObjectURL(file);
-      setPdfPreviewUrl(previewUrl);
       setPdfError(null);
       setPageNumber(1);
       setNumPages(null);
@@ -163,6 +179,7 @@ const SignPdf = () => {
         });
         const data = await response.json();
         setPdfUrl(data.url);
+        setPdfPreviewUrl(data.url); // Use backend URL for persistent viewing
       } catch (error) {
         console.error('Error uploading file:', error);
       } finally {
@@ -180,7 +197,7 @@ const SignPdf = () => {
 
   const handleSendToTaxPreparer = async () => {
     if (!pdfUrl) {
-      alert("Please upload a document first.");
+      setErrorMessage("Please upload a document first.");
       return;
     }
     // Prepare signatures data with consistent coordinate system
@@ -199,6 +216,7 @@ const SignPdf = () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-api-key': API_KEY
         },
         body: JSON.stringify({
           to: taxPreparerEmail,
@@ -207,6 +225,7 @@ const SignPdf = () => {
         }),
       });
       setEmailSent(true);
+      onComplete?.();
     } catch (error) {
       console.error('Error sending email:', error);
     }
@@ -244,10 +263,10 @@ const SignPdf = () => {
         const url = URL.createObjectURL(blob);
         window.open(url, '_blank');
       } else {
-        alert('Failed to generate signed PDF');
+        setErrorMessage('Failed to generate signed PDF');
       }
     } catch (error) {
-      alert('Failed to generate signed PDF');
+      setErrorMessage('Failed to generate signed PDF');
     }
     setIsSigning(false);
   };
@@ -258,14 +277,6 @@ const SignPdf = () => {
   };
 
   // Helper to get drop coordinates relative to PDF
-  function getRelativeCoords(event: any) {
-    const pdfRect = pdfDropRef.current?.getBoundingClientRect();
-    if (!pdfRect) return { x: 0, y: 0 };
-    const x = event.clientX - pdfRect.left;
-    const y = event.clientY - pdfRect.top;
-    return { x, y };
-  }
-
   function handleDragEnd(event: any) {
     console.log('handleDragEnd', event);
     const { over, active, activatorEvent } = event;
@@ -337,7 +348,7 @@ const SignPdf = () => {
 
   const handleSubmitSignedPdf = async () => {
     if (signaturesOnPages.length < 2) {
-      alert('Please ensure both signatures are provided before submitting.');
+      setErrorMessage('Please ensure both signatures are provided before submitting.');
       return;
     }
     if (!pdfFile || !numPages) return;
@@ -378,21 +389,22 @@ const SignPdf = () => {
         });
         if (uploadResp.ok) {
           const data = await uploadResp.json();
-          alert('Signed PDF submitted and saved successfully!\nURL: ' + data.url);
+          setSignedPdfUrl(data.url);
+          setSubmissionComplete(true);
+          onComplete?.();
         } else {
-          alert('Failed to upload signed PDF.');
+          setErrorMessage('Failed to upload signed PDF.');
         }
       } else {
-        alert('Failed to generate signed PDF.');
+        setErrorMessage('Failed to generate signed PDF.');
       }
     } catch (error) {
-      alert('Failed to submit signed PDF.');
+      setErrorMessage('Failed to submit signed PDF.');
     }
     setIsSubmitting(false);
   };
 
   // Modern UI starts here
-  const [activeSignatureTab, setActiveSignatureTab] = useState<'user' | 'preparer'>('user');
   const [isMobile, setIsMobile] = useState(false);
   const [tapToPlaceMode, setTapToPlaceMode] = useState<null | 'user' | 'preparer'>(null);
   const [pendingSignatureData, setPendingSignatureData] = useState<SignatureData | null>(null);
@@ -458,94 +470,242 @@ const SignPdf = () => {
     setPendingSignatureData(null);
   }
 
-  return (
-    <DndContext
-      onDragEnd={handleDragEnd}
-    >
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-blue-50 to-blue-100 py-8 px-2 relative">
-        {/* Sticky, horizontally scrollable signature header for mobile */}
-        {pdfPreviewUrl && !isLoading && isMobile && (
-          <div className="sticky top-0 z-40 w-full bg-white/95 border-b border-yellow-100 shadow-md overflow-x-auto flex flex-row gap-2 py-2 px-2" style={{ WebkitOverflowScrolling: 'touch' }}>
-            <div className="flex flex-row gap-2 min-w-[400px]">
-              <button
-                className={`flex-1 px-2 py-1 rounded-lg font-semibold text-xs ${tapToPlaceMode === 'user' ? 'bg-yellow-200 text-yellow-900' : 'bg-yellow-50 text-yellow-700'}`}
-                onClick={() => handleSignatureTapToPlace('user', userSignature)}
-                disabled={!userSignature}
-              >
-                User E-sign
-              </button>
-              <button
-                className={`flex-1 px-2 py-1 rounded-lg font-semibold text-xs ${tapToPlaceMode === 'preparer' ? 'bg-yellow-200 text-yellow-900' : 'bg-yellow-50 text-yellow-700'}`}
-                onClick={() => handleSignatureTapToPlace('preparer', preparerSignature)}
-                disabled={!preparerSignature}
-              >
-                Tax Preparer E-sign
-              </button>
-              {/* Show signature previews in header */}
-              <div className="flex flex-row gap-2 items-center">
-                {userSignature && <img src={userSignature.signature} alt="User Signature" className="w-16 h-8 object-contain border border-yellow-200 rounded bg-white" />}
-                {preparerSignature && <img src={preparerSignature.signature} alt="Preparer Signature" className="w-16 h-8 object-contain border border-yellow-200 rounded bg-white" />}
-              </div>
-            </div>
-          </div>
-        )}
-        {/* Signature input for mobile (below sticky header) */}
-        {pdfPreviewUrl && !isLoading && isMobile && (
-          <div className="w-full flex flex-col gap-2 mb-2 mt-2">
-            {/* Show signature input for whichever is missing */}
-            {!userSignature && (
-              <DraggableSignature
-                id="user-provider"
-                label="User E-sign"
-                position={{ x: 0, y: 0 }}
-                onSign={setUserSignature}
-                sidebar={true}
-                signatureData={userSignature}
-              />
-            )}
-            {!preparerSignature && (
-              <DraggableSignature
-                id="preparer-provider"
-                label="Tax Preparer E-sign"
-                position={{ x: 0, y: 100 }}
-                onSign={setPreparerSignature}
-                sidebar={true}
-                signatureData={preparerSignature}
-              />
-            )}
-          </div>
-        )}
-        {/* Desktop signature sidebars (unchanged) */}
-        {pdfPreviewUrl && !isLoading && !isMobile && (
-          <>
-            <div className="hidden sm:flex fixed left-8 top-1/2 -translate-y-1/2 flex-col gap-6 z-30 bg-white/90 border border-blue-100 rounded-2xl shadow-2xl p-4 animate-fade-in">
-              <DraggableSignature
-                id="user-provider"
-                label="User E-sign"
-                position={{ x: 0, y: 0 }}
-                onSign={setUserSignature}
-                sidebar={true}
-                signatureData={userSignature}
-              />
-            </div>
-            <div className="hidden sm:flex fixed right-8 top-1/2 -translate-y-1/2 flex-col gap-6 z-30 bg-white/90 border border-blue-100 rounded-2xl shadow-2xl p-4 animate-fade-in">
-              <DraggableSignature
-                id="preparer-provider"
-                label="Tax Preparer E-sign"
-                position={{ x: 0, y: 100 }}
-                onSign={setPreparerSignature}
-                sidebar={true}
-                signatureData={preparerSignature}
-              />
-            </div>
-          </>
-        )}
-        {/* Main content */}
-        <div className="flex-1 flex flex-col items-center w-full">
-          <div className="w-full max-w-3xl bg-white/90 rounded-2xl shadow-2xl p-0 md:p-8 flex flex-col items-center border border-blue-100 relative animate-fade-in mt-8">
-            <h1 className="text-4xl font-extrabold mb-2 text-center text-blue-900 tracking-tight mt-6">Sign PDF Document</h1>
-            <p className="text-gray-500 mb-8 text-center max-w-lg">Upload your PDF, add e-signatures, and send it securely. Drag the signature to the desired position on the document.</p>
+  const steps = [
+    { id: 1, label: 'Upload' },
+    { id: 2, label: 'User Sign' },
+    { id: 3, label: 'Preparer Sign' },
+    { id: 4, label: 'Submit' },
+  ];
+  const currentStep = !pdfPreviewUrl ? 1 : !userSignature ? 2 : !preparerSignature ? 3 : 4;
 
+  return (
+    <>
+      {/* Sticky, horizontally scrollable signature header for mobile */}
+      {pdfPreviewUrl && !isLoading && isMobile && (
+        <div className="sticky top-0 z-40 w-full bg-white/95 border-b border-yellow-100 shadow-md overflow-x-auto flex flex-row gap-2 py-2 px-2" style={{ WebkitOverflowScrolling: 'touch' }}>
+          <div className="flex flex-row gap-2 min-w-[400px]">
+            <button
+              className={`flex-1 px-2 py-1 rounded-lg font-semibold text-xs ${tapToPlaceMode === 'user' ? 'bg-yellow-200 text-yellow-900' : 'bg-yellow-50 text-yellow-700'}`}
+              onClick={() => handleSignatureTapToPlace('user', userSignature)}
+              disabled={!userSignature}
+            >
+              User E-sign
+            </button>
+            <button
+              className={`flex-1 px-2 py-1 rounded-lg font-semibold text-xs ${tapToPlaceMode === 'preparer' ? 'bg-yellow-200 text-yellow-900' : 'bg-yellow-50 text-yellow-700'}`}
+              onClick={() => handleSignatureTapToPlace('preparer', preparerSignature)}
+              disabled={!preparerSignature}
+            >
+              Tax Preparer E-sign
+            </button>
+            {/* Show signature previews in header */}
+            <div className="flex flex-row gap-2 items-center">
+              {userSignature && <img src={userSignature.signature} alt="User Signature" className="w-16 h-8 object-contain border border-yellow-200 rounded bg-white" />}
+              {preparerSignature && <img src={preparerSignature.signature} alt="Preparer Signature" className="w-16 h-8 object-contain border border-yellow-200 rounded bg-white" />}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Signature input for mobile (below sticky header) */}
+      {pdfPreviewUrl && !isLoading && isMobile && (
+        <div className="w-full flex flex-col gap-2 mb-2 mt-2">
+            {/* Consent checkbox and legal notice */}
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="consent-checkbox"
+                checked={consentGiven}
+                onChange={e => setConsentGiven(e.target.checked)}
+                className="accent-blue-600 w-4 h-4"
+              />
+              <label htmlFor="consent-checkbox" className="text-xs text-gray-700">
+                I agree to sign this document electronically and acknowledge that my electronic signature is legally binding.
+              </label>
+            </div>
+            {/* Show signature input for whichever is missing */}
+            {activeRole === 'user' && !userSignature && (
+              <DraggableSignature
+                id="user-provider"
+                label="User E-sign"
+                position={{ x: 0, y: 0 }}
+                onSign={setUserSignature}
+                sidebar={true}
+                signatureData={userSignature}
+                disabled={!consentGiven}
+              />
+            )}
+            {activeRole === 'preparer' && !preparerSignature && (
+              <DraggableSignature
+                id="preparer-provider"
+                label="Tax Preparer E-sign"
+                position={{ x: 0, y: 100 }}
+                onSign={setPreparerSignature}
+                sidebar={true}
+                signatureData={preparerSignature}
+              />
+            )}
+        </div>
+      )}
+      {/* Desktop signature sidebars (unchanged) */}
+      {pdfPreviewUrl && !isLoading && !isMobile && (
+        <>
+          <div className="hidden sm:flex flex-col items-center mb-4">
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="consent-checkbox-desktop"
+                checked={consentGiven}
+                onChange={e => setConsentGiven(e.target.checked)}
+                className="accent-blue-600 w-4 h-4"
+              />
+              <label htmlFor="consent-checkbox-desktop" className="text-xs text-gray-700">
+                I agree to sign this document electronically and acknowledge that my electronic signature is legally binding.
+              </label>
+            </div>
+          </div>
+          <div className="hidden sm:flex fixed left-8 top-1/2 -translate-y-1/2 flex-col gap-6 z-30 bg-white/90 border border-blue-100 rounded-2xl shadow-2xl p-4 animate-fade-in">
+            <DraggableSignature
+              id="user-provider"
+              label="User E-sign"
+              position={{ x: 0, y: 0 }}
+              onSign={setUserSignature}
+              sidebar={true}
+              signatureData={userSignature}
+            />
+          </div>
+          <div className="hidden sm:flex fixed right-8 top-1/2 -translate-y-1/2 flex-col gap-6 z-30 bg-white/90 border border-blue-100 rounded-2xl shadow-2xl p-4 animate-fade-in">
+            <DraggableSignature
+              id="preparer-provider"
+              label="Tax Preparer E-sign"
+              position={{ x: 0, y: 100 }}
+              onSign={setPreparerSignature}
+              sidebar={true}
+              signatureData={preparerSignature}
+            />
+          </div>
+        </>
+      )}
+      {/* Global Loading Overlay for long operations */}
+      {(isSubmitting || isSigning) && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-white rounded-lg p-6 flex flex-col items-center shadow-lg">
+            <Loader2 className="h-10 w-10 text-blue-500 animate-spin mb-2" />
+            <p className="text-blue-700 font-medium">{isSubmitting ? 'Submitting your signed PDF...' : 'Generating signed PDF...'}</p>
+            <p className="text-gray-500 text-sm mt-1">This may take a moment.</p>
+          </div>
+        </div>
+      )}
+      {/* Progress Stepper */}
+      <div className="w-full max-w-3xl mx-auto flex items-center justify-center gap-2 mb-6 mt-2">
+        {steps.map((step, idx) => (
+          <div key={step.id} className="flex items-center">
+            <div className={`rounded-full w-8 h-8 flex items-center justify-center font-bold text-sm ${currentStep > step.id ? 'bg-green-400 text-white' : currentStep === step.id ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-500'}`}>{step.id}</div>
+            <span className={`ml-2 mr-4 text-sm ${currentStep >= step.id ? 'text-blue-900 font-semibold' : 'text-gray-400'}`}>{step.label}</span>
+            {idx < steps.length - 1 && <div className="w-8 h-1 bg-gray-300 rounded-full" />}
+          </div>
+        ))}
+      </div>
+      {/* Role Switcher */}
+      <div className="w-full max-w-3xl mx-auto flex items-center justify-center gap-4 mb-4">
+        <button
+          className={`px-4 py-2 rounded-lg font-semibold text-sm ${activeRole === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-700'}`}
+          onClick={() => setActiveRole('user')}
+        >
+          User Signature
+        </button>
+        <button
+          className={`px-4 py-2 rounded-lg font-semibold text-sm ${activeRole === 'preparer' ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-700'}`}
+          onClick={() => setActiveRole('preparer')}
+        >
+          Tax Preparer Signature
+        </button>
+      </div>
+      {/* Mobile signature guidance */}
+      {isMobile && (
+        <div className="w-full text-center text-blue-700 font-semibold mb-2 animate-fade-in">
+          {activeRole === 'user' && !userSignature && 'Please provide and place your signature on the document.'}
+          {activeRole === 'preparer' && !preparerSignature && 'Please provide and place the Tax Preparer signature.'}
+        </div>
+      )}
+      <DndContext onDragEnd={handleDragEnd}>
+        {submissionComplete ? (
+          <div className="flex-1 flex flex-col items-center justify-center w-full max-w-3xl bg-white/90 rounded-2xl shadow-2xl p-8 border border-blue-100 animate-fade-in mt-8">
+            <h1 className="text-3xl font-bold text-blue-900 mb-4 text-center">Signing Complete!</h1>
+            <p className="text-gray-600 mb-6 text-center max-w-md">Your document has been successfully signed and submitted.</p>
+            {signedPdfUrl && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 text-center w-full max-w-md">
+                <p className="text-blue-700 font-medium mb-2">Signed Document Ready</p>
+                <a href={signedPdfUrl} target="_blank" rel="noopener noreferrer" className="inline-block bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors">
+                  Download Signed PDF
+                </a>
+              </div>
+            )}
+            {signaturesOnPages.length > 0 && (
+              <div className="w-full max-w-md mb-6">
+                <h2 className="text-lg font-semibold mb-2 text-blue-900">Signature Audit Log</h2>
+                <table className="w-full text-sm border border-blue-200 rounded-lg bg-white">
+                  <thead>
+                    <tr className="bg-blue-50">
+                      <th className="p-2 border-b">Page</th>
+                      <th className="p-2 border-b">Name</th>
+                      <th className="p-2 border-b">IP</th>
+                      <th className="p-2 border-b">Timestamp</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {signaturesOnPages.map((sig, idx) => (
+                      <tr key={idx} className="border-t">
+                        <td className="p-2">{sig.page}</td>
+                        <td className="p-2">{sig.signature.name}</td>
+                        <td className="p-2">{sig.signature.ipAddress}</td>
+                        <td className="p-2">{new Date(sig.signature.timestamp).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <button
+                  className="mt-2 px-4 py-2 bg-blue-100 text-blue-800 rounded hover:bg-blue-200 text-sm"
+                  onClick={() => {
+                    const csv = [
+                      ['Page', 'Name', 'IP', 'Timestamp'],
+                      ...signaturesOnPages.map(sig => [
+                        sig.page,
+                        sig.signature.name,
+                        sig.signature.ipAddress,
+                        new Date(sig.signature.timestamp).toLocaleString()
+                      ])
+                    ].map(row => row.join(',')).join('\n');
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'signature_audit_log.csv';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  Download Audit Log (CSV)
+                </button>
+              </div>
+            )}
+            <div className="flex flex-col md:flex-row gap-4 w-full max-w-md justify-center">
+              {onBack && (
+                <Button onClick={onBack} variant="outline" className="w-full md:w-auto shadow-md">Back to Workflow</Button>
+              )}
+              <Button onClick={() => window.location.reload()} variant="secondary" className="w-full md:w-auto shadow-md">Start New Signing</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center w-full">
+            <div className="w-full max-w-3xl bg-white/90 rounded-2xl shadow-2xl p-0 md:p-8 flex flex-col items-center border border-blue-100 relative animate-fade-in mt-8">
+              <h1 className="text-4xl font-extrabold mb-2 text-center text-blue-900 tracking-tight mt-6">Sign PDF Document</h1>
+              <p className="text-gray-500 mb-8 text-center max-w-lg">Upload your PDF, add e-signatures, and send it securely. Drag the signature to the desired position on the document.</p>
+              {errorMessage && (
+                <div className="w-full max-w-lg bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg mb-6 text-center animate-fade-in">
+                  <p>{errorMessage}</p>
+                  <button onClick={() => setErrorMessage(null)} className="mt-2 text-sm underline">Dismiss</button>
+                </div>
+              )}
               {/* Upload area - only show if no PDF is loaded and no ID/token in URL */}
               {!id && !token && !pdfPreviewUrl && (
                 <div
@@ -571,7 +731,6 @@ const SignPdf = () => {
                   </div>
                 </div>
               )}
-
               {/* PDF Preview and Signature Area */}
               <div className="w-full flex flex-col items-center relative px-0 sm:px-4">
                 {isLoading && (
@@ -583,10 +742,7 @@ const SignPdf = () => {
                 {pdfPreviewUrl && !isLoading && (
                   <div className="w-full flex flex-col items-center relative animate-fade-in">
                     {/* PDF Preview Card with droppable or tap-to-place */}
-                    <div
-                      className="w-full max-w-full overflow-x-auto"
-                      ref={pdfResponsiveContainerRef}
-                    >
+                    <div className="w-full max-w-full overflow-x-auto" ref={pdfResponsiveContainerRef}>
                       <PdfDropArea pdfDropRef={pdfDropRef} isOverPdf={false}>
                         <div
                           ref={pdfPageRef}
@@ -609,7 +765,27 @@ const SignPdf = () => {
                               width={pdfContainerWidth || undefined}
                               scale={1}
                               onRenderSuccess={(page) => setPageDimensions({ width: page.width, height: page.height })}
-                            />
+                            >
+                              {/* Add 'Sign here' placeholders for User and Tax Preparer if not yet signed on this page */}
+                              {pageNumber === 1 && !signaturesOnPages.some(sig => sig.page === 1 && sig.signature.name.includes('User')) && (
+                                <div
+                                  style={{ position: 'absolute', left: '10%', bottom: '10%', zIndex: 5 }}
+                                  className="bg-blue-100 border-2 border-dashed border-blue-400 rounded-lg p-2 text-center w-40 opacity-80"
+                                >
+                                  <p className="text-blue-700 font-semibold text-sm">User Sign Here</p>
+                                  <p className="text-blue-500 text-xs">Drag signature</p>
+                                </div>
+                              )}
+                              {pageNumber === 1 && !signaturesOnPages.some(sig => sig.page === 1 && sig.signature.name.includes('Tax Preparer')) && (
+                                <div
+                                  style={{ position: 'absolute', right: '10%', bottom: '10%', zIndex: 5 }}
+                                  className="bg-green-100 border-2 border-dashed border-green-400 rounded-lg p-2 text-center w-40 opacity-80"
+                                >
+                                  <p className="text-green-700 font-semibold text-sm">Tax Preparer Sign Here</p>
+                                  <p className="text-green-500 text-xs">Drag signature</p>
+                                </div>
+                              )}
+                            </Page>
                             {/* Render placed signatures for this page */}
                             {signaturesOnPages.filter(sig => sig.page === pageNumber).map((sig, idx) => {
                               // Calculate render position based on page dimensions
@@ -673,6 +849,21 @@ const SignPdf = () => {
                         <FileCheck2 className="mr-2 h-5 w-5" />
                         View Signed PDF
                       </Button>
+                      {onBack && (
+                        <Button
+                          onClick={onBack}
+                          variant="outline"
+                          className="w-full md:w-auto shadow-md"
+                        >
+                          Back
+                        </Button>
+                      )}
+                      {emailSent && (
+                        <div className="text-green-600 text-sm mt-2 text-center w-full md:w-auto">
+                          {userSignature && !preparerSignature && 'Waiting for Tax Preparer signature...'}
+                          {userSignature && preparerSignature && 'All signatures complete! Ready to submit.'}
+                        </div>
+                      )}
                       {!emailSent ? (
                         <Dialog>
                           <DialogTrigger asChild>
@@ -702,22 +893,28 @@ const SignPdf = () => {
                           Finalize
                         </Button>
                       )}
-                      <Button
-                        onClick={handleSubmitSignedPdf}
-                        disabled={isSubmitting}
-                        className="w-full md:w-auto shadow-md"
-                      >
-                        {isSubmitting ? 'Submitting...' : 'Submit'}
-                      </Button>
+                      <div className="flex flex-col items-center w-full md:w-auto">
+                        <Button
+                          onClick={handleSubmitSignedPdf}
+                          disabled={isSubmitting || signaturesOnPages.length < 2}
+                          className="w-full md:w-auto shadow-md"
+                        >
+                          {isSubmitting ? 'Submitting...' : 'Submit'}
+                        </Button>
+                        {signaturesOnPages.length < 2 && (
+                          <span className="text-red-500 text-xs mt-1">Both User and Tax Preparer signatures required</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
             </div>
           </div>
-        </div>
+        )}
       </DndContext>
-    );
+    </>
+  );
 };
 
 export default SignPdf; 

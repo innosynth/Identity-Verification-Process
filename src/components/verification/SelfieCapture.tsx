@@ -1,16 +1,16 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { Video, Play, Pause, RotateCcw, Check, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import * as faceapi from 'face-api.js';
 
 interface SelfieCaptureProps {
   onCaptureComplete: (videoBlob: Blob) => void;
   onBack: () => void;
+  envelopeId: string;
 }
 
-export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps) => {
+export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieCaptureProps) => {
   const [isRecording, setIsRecording] = useState(false);
   const [hasRecorded, setHasRecorded] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -19,7 +19,6 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
   const [isCameraInitializing, setIsCameraInitializing] = useState(false);
   const [isFaceMatching, setIsFaceMatching] = useState(false);
   const [faceMatchResult, setFaceMatchResult] = useState<boolean | null>(null);
-  const [modelsLoaded, setModelsLoaded] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -27,24 +26,6 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
   const chunksRef = useRef<Blob[]>([]);
 
   const RECORDING_DURATION = 5; // seconds
-
-  useEffect(() => {
-    const loadModels = async () => {
-      try {
-        await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
-        await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
-        await faceapi.nets.faceRecognitionNet.loadFromUri('/models');
-        setModelsLoaded(true);
-        console.log('Face-api.js models loaded');
-      } catch (error) {
-        console.error('Error loading face-api.js models:', error);
-      }
-    };
-    loadModels();
-    return () => {
-      stopCamera();
-    };
-  }, []);
 
   const startCamera = async () => {
     setIsCameraInitializing(true);
@@ -89,9 +70,7 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
       setRecordedBlob(blob);
       setHasRecorded(true);
       stopCamera();
-      if (modelsLoaded) {
-        performFaceMatching(blob);
-      }
+      performFaceMatching(blob);
     };
 
     mediaRecorder.start();
@@ -174,9 +153,16 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
         const formData = new FormData();
         formData.append('selfieImage', dataURItoBlob(selfieImage));
         formData.append('documentImage', dataURItoBlob(documentImageData));
+        formData.append('envelopeId', envelopeId);
 
-        const response = await fetch('http://localhost:3000/api/verify/face', {
+        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+        const API_KEY = import.meta.env.VITE_ADMIN_API_KEY || 'api_a44ed8187b7eefb29518361d3e2eda69';
+
+        const response = await fetch(`${API_URL}/api/verify/face`, {
           method: 'POST',
+          headers: {
+            'x-api-key': API_KEY
+          },
           body: formData,
         });
 
@@ -189,7 +175,7 @@ export const SelfieCapture = ({ onCaptureComplete, onBack }: SelfieCaptureProps)
         sessionStorage.setItem('faceMatchResult', result.faceVerified.toString());
       }
     } catch (error) {
-      console.error('Error performing face matching with backend API:', error);
+      console.error('Error during face match:', error);
       setFaceMatchResult(false);
       sessionStorage.setItem('faceMatchResult', 'false');
     } finally {

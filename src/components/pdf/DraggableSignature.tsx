@@ -24,9 +24,10 @@ interface DraggableSignatureProps {
   onSign: (signature: SignatureData) => void;
   sidebar?: boolean;
   signatureData?: SignatureData | null;
+  disabled?: boolean;
 }
 
-export const DraggableSignature = ({ id, label, position, onSign, sidebar, signatureData: propSignatureData }: DraggableSignatureProps) => {
+export const DraggableSignature = ({ id, label, position, onSign, sidebar, signatureData: propSignatureData, disabled }: DraggableSignatureProps) => {
   const [signatureData, setSignatureData] = useState<SignatureData | null>(propSignatureData || null);
   const [name, setName] = useState('');
   const [ipAddress, setIpAddress] = useState('');
@@ -42,7 +43,7 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
       .catch(() => setIpAddress('Could not fetch IP'));
   }, []);
 
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform } = useDraggable({
     id: id,
     data: { signatureData: signatureData },
     disabled: !sidebar || !signatureData, // Only draggable if in sidebar and signatureData exists
@@ -50,7 +51,7 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
 
   const style = sidebar
     ? { transform: CSS.Translate.toString(transform) }
-    : { left: position.x, top: position.y, position: 'absolute' };
+    : { left: position.x, top: position.y, position: 'absolute' as const };
 
   const handleSignatureComplete = (signature: { type: "drawn" | "uploaded"; data: string }) => {
     const newSignatureData = {
@@ -88,8 +89,8 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
         ) : (
           <>
             <Dialog>
-              <DialogTrigger asChild>
-                <Button variant="outline" size="sm" className="w-full mt-2 shadow-sm">
+              <DialogTrigger asChild disabled={disabled}>
+                <Button variant="outline" size="sm" className="w-full mt-2 shadow-sm" disabled={disabled}>
                   <Signature className="mr-2 h-4 w-4" />
                   Provide Signature
                 </Button>
@@ -104,12 +105,18 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="mb-2 text-base"
+                    disabled={disabled}
                   />
-                  <ESignature onSignatureComplete={handleSignatureComplete} onBack={() => {}} />
+                  <ESignature onSignatureComplete={handleSignatureComplete} onBack={() => {}} onSignLater={() => {}} onDecline={() => {}} />
                 </div>
               </DialogContent>
             </Dialog>
-            <div className="text-xs text-yellow-700 mt-2 text-center">Please provide your signature before dragging.</div>
+            {disabled && (
+              <div className="text-xs text-yellow-700 mt-2 text-center opacity-60">You must agree to the legal notice before signing.</div>
+            )}
+            {!disabled && (
+              <div className="text-xs text-yellow-700 mt-2 text-center">Please provide your signature before dragging.</div>
+            )}
           </>
         )}
       </div>

@@ -234,6 +234,19 @@ const createTables = async () => {
       )
     `);
     console.log('API keys table created or already exists.');
+
+    // Create face_verification_attempts table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS face_verification_attempts (
+        id SERIAL PRIMARY KEY,
+        envelope_id VARCHAR(255) REFERENCES envelopes(id) ON DELETE CASCADE,
+        selfie_url TEXT NOT NULL,
+        document_url TEXT NOT NULL,
+        face_verified BOOLEAN NOT NULL,
+        attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('Face verification attempts table created or already exists.');
   } catch (error) {
     console.error('Error creating tables:', error);
   }
@@ -557,14 +570,28 @@ app.post('/api/envelope/:id/prepare', authenticateApiKey, async (req, res) => {
 
 // Endpoint for server-side document name verification
 app.post('/api/verify/document-name', authenticateApiKey, upload.single('documentImage'), async (req, res) => {
-  const { recipientName } = req.body;
+  const { envelopeId } = req.body;
   const file = req.file;
 
-  if (!recipientName || !file) {
-    return res.status(400).json({ error: 'Missing recipient name or document image' });
+  if (!envelopeId || !file) {
+    return res.status(400).json({ error: 'Missing envelope ID or document image' });
   }
 
   try {
+    // Look up recipient name from envelopeId
+    const envelopeQuery = 'SELECT * FROM envelopes WHERE id = $1';
+    const envelopeResult = await pool.query(envelopeQuery, [envelopeId]);
+    if (envelopeResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Envelope not found' });
+    }
+    const envelope = envelopeResult.rows[0];
+    const recipientQuery = 'SELECT * FROM recipients WHERE id = $1';
+    const recipientResult = await pool.query(recipientQuery, [envelope.recipient_id]);
+    if (recipientResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Recipient not found for envelope' });
+    }
+    const recipientName = recipientResult.rows[0].name;
+
     // Use Gemini API for document verification
     const axios = require('axios');
     console.log(`Processing document image with Gemini API: ${file.originalname}`);
@@ -653,52 +680,115 @@ app.post('/api/verify/document-name', authenticateApiKey, upload.single('documen
 // Endpoint for server-side facial recognition
 app.post('/api/verify/face', authenticateApiKey, upload.fields([{ name: 'selfieImage', maxCount: 1 }, { name: 'documentImage', maxCount: 1 }]), async (req, res) => {
   const files = req.files;
+  const envelopeId = req.body.envelopeId;
 
-  if (!files['selfieImage'] || !files['documentImage']) {
-    return res.status(400).json({ error: 'Missing selfie or document image' });
+  if (!envelopeId || !files['selfieImage'] || !files['documentImage']) {
+    return res.status(400).json({ error: 'Missing envelope ID, selfie, or document image' });
   }
 
   try {
-    // Use face-api.js for facial recognition
-    const faceApi = require('face-api.js');
-    const canvas = require('canvas');
-    const { Canvas, Image, ImageData } = canvas;
-    faceApi.env.monkeyPatch({ Canvas, Image, ImageData });
+    // Upload images to blob storage
+    const { put } = require('@vercel/blob');
+    const selfieFile = files['selfieImage'][0];
+    const documentFile = files['documentImage'][0];
+    const selfieBlob = await put(`${envelopeId}-selfie-${Date.now()}.jpg`, selfieFile.buffer, { access: 'public', token: process.env.BLOB_READ_WRITE_TOKEN });
+    const documentBlob = await put(`${envelopeId}-docimg-${Date.now()}.jpg`, documentFile.buffer, { access: 'public', token: process.env.BLOB_READ_WRITE_TOKEN });
+    const selfieUrl = selfieBlob.url;
+    const documentUrl = documentBlob.url;
 
-    console.log('Verifying face match between selfie and document image');
+    // Use Gemini API for face comparison
+    const axios = require('axios');
+    const selfieBase64 = selfieFile.buffer.toString('base64');
+    const documentBase64 = documentFile.buffer.toString('base64');
 
-    // Load face detection and recognition models
-    await faceApi.nets.ssdMobilenetv1.loadFromDisk('./models');
-    await faceApi.nets.faceLandmark68Net.loadFromDisk('./models');
-    await faceApi.nets.faceRecognitionNet.loadFromDisk('./models');
-
-    // Load images
-    const selfieImg = await canvas.loadImage(files['selfieImage'][0].buffer);
-    const documentImg = await canvas.loadImage(files['documentImage'][0].buffer);
-
-    // Detect faces in both images
-    const selfieDetections = await faceApi.detectSingleFace(selfieImg).withFaceLandmarks().withFaceDescriptor();
-    const documentDetections = await faceApi.detectSingleFace(documentImg).withFaceLandmarks().withFaceDescriptor();
-
-    let faceVerified = false;
-    if (selfieDetections && documentDetections) {
-      // Compare face descriptors
-      const distance = faceApi.euclideanDistance(selfieDetections.descriptor, documentDetections.descriptor);
-      // A lower distance means a better match; typically, a threshold of 0.6 is used
-      faceVerified = distance < 0.6;
-      console.log(`Face match distance: ${distance}, Verified: ${faceVerified}`);
-    } else {
-      console.log('Could not detect faces in one or both images');
+    // Load Gemini API key from environment variables
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    if (!GEMINI_API_KEY) {
+      throw new Error('Gemini API key is not configured');
     }
+
+    // Craft prompt for Gemini API (request JSON output)
+    const prompt = `Compare the two provided images. Are both images of the same person?\nReturn a JSON object with the following fields:\n- faceMatch: \"Yes\" if both images are of the same person, otherwise \"No\"\n- confidence: High/Medium/Low\n- reason: Explanation for the match result or any issues encountered.`;
+
+    // Make request to Gemini API (REST call, expecting JSON response)
+    const geminiResponse = await axios.post(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+      {
+        contents: [{
+          parts: [
+            {
+              inline_data: {
+                mime_type: 'image/jpeg',
+                data: selfieBase64
+              }
+            },
+            {
+              inline_data: {
+                mime_type: 'image/jpeg',
+                data: documentBase64
+              }
+            },
+            { text: prompt }
+          ]
+        }],
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      },
+      {
+        headers: {
+          'x-goog-api-key': GEMINI_API_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    // Parse Gemini API JSON response robustly
+    let result = null;
+    if (geminiResponse.data && geminiResponse.data.candidates && geminiResponse.data.candidates.length > 0) {
+      const content = geminiResponse.data.candidates[0].content;
+      if (content && content.parts && content.parts.length > 0) {
+        try {
+          result = JSON.parse(content.parts[0].text);
+        } catch (e) {
+          // Fallback: try to extract JSON from text
+          const match = content.parts[0].text.match(/\{[\s\S]*\}/);
+          if (match) {
+            result = JSON.parse(match[0]);
+          }
+        }
+      }
+    }
+
+    if (!result) {
+      return res.status(500).json({ error: 'Failed to parse Gemini API response' });
+    }
+
+    // Compose response for frontend
+    const faceVerified = (result.faceMatch && result.faceMatch.toLowerCase() === 'yes');
+    const reason = result.reason || 'No detailed reason provided';
+    const confidence = result.confidence;
+
+    // Store attempt in database (face_verification_attempts table)
+    const attemptQuery = 'INSERT INTO face_verification_attempts (envelope_id, selfie_url, document_url, face_verified, attempted_at) VALUES ($1, $2, $3, $4, NOW())';
+    await pool.query(attemptQuery, [envelopeId, selfieUrl, documentUrl, faceVerified]);
 
     // Log audit event for face verification
     const ipAddress = req.ip || req.connection.remoteAddress;
     await logAuditEvent('FACE_VERIFICATION_PROCESSED', null, ipAddress, { faceVerified });
 
-    res.status(200).json({ faceVerified });
+    res.status(200).json({
+      faceVerified,
+      reason,
+      confidence
+    });
   } catch (error) {
-    console.error('Error verifying face match:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error verifying face match with Gemini API:', error.stack || error);
+    // If Gemini API returned an error response, forward the details
+    if (error.response && error.response.data) {
+      return res.status(500).json({ error: 'Internal server error', details: error.response.data });
+    }
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 

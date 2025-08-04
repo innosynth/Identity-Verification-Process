@@ -13,9 +13,10 @@ interface DocumentCaptureProps {
   };
   onCaptureComplete: (images: { front: string; back?: string }) => void;
   onBack: () => void;
+  envelopeId: string;
 }
 
-export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: DocumentCaptureProps) => {
+export const DocumentCapture = ({ documentType, onCaptureComplete, onBack, envelopeId }: DocumentCaptureProps) => {
   const [currentSide, setCurrentSide] = useState<"front" | "back">("front");
   const [capturedImages, setCapturedImages] = useState<{ front?: string; back?: string }>({});
   const [isCapturing, setIsCapturing] = useState(false);
@@ -23,6 +24,7 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
   const [extractedText, setExtractedText] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [nameMatchError, setNameMatchError] = useState(false);
+  const [verificationReason, setVerificationReason] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -93,10 +95,9 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
   const processImageForText = async (imageUrl: string) => {
     setIsProcessing(true);
     try {
-      const recipientName = sessionStorage.getItem('recipientName') || 'Test Name';
       const formData = new FormData();
       formData.append('documentImage', dataURItoBlob(imageUrl));
-      formData.append('recipientName', recipientName);
+      formData.append('envelopeId', envelopeId);
 
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
       const API_KEY = import.meta.env.VITE_ADMIN_API_KEY || 'api_a44ed8187b7eefb29518361d3e2eda69';
@@ -114,13 +115,15 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
       }
 
       const result = await response.json();
-      setExtractedText(result.nameVerified ? 'Name verified' : `Name mismatch: ${result.reason || 'Unknown reason'}`);
+      setExtractedText(result.nameVerified ? 'Name verified' : 'Name mismatch');
       setNameMatchError(!result.nameVerified);
+      setVerificationReason(!result.nameVerified ? (result.reason || 'Unknown reason') : null);
       sessionStorage.setItem('nameMatchError', (!result.nameVerified).toString());
     } catch (error) {
       console.error("Error processing image with backend API:", error);
       setExtractedText("Error processing text.");
       setNameMatchError(true);
+      setVerificationReason("Error processing text.");
       sessionStorage.setItem('nameMatchError', 'true');
     } finally {
       setIsProcessing(false);
@@ -215,8 +218,15 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
         {isProcessing && <p className="text-primary">Processing document...</p>}
         {extractedText && !isProcessing && (
           <p className="text-sm mt-2">
-            {nameMatchError ? <span className="text-red-500">Name mismatch detected. Please retry.</span> : <span className="text-green-500">Document verified successfully.</span>}
+            {nameMatchError ? (
+              <span className="text-red-500">Name mismatch detected.</span>
+            ) : (
+              <span className="text-green-500">Document verified successfully.</span>
+            )}
           </p>
+        )}
+        {nameMatchError && verificationReason && !isProcessing && (
+          <div className="mt-2 text-sm text-red-600 font-medium">Reason: {verificationReason}</div>
         )}
       </div>
 
