@@ -19,7 +19,8 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Index />} />
-          <Route path="/sign-pdf" element={<SignPdf />} />
+          <Route path="/verify-start/:id" element={<Index />} />
+          <Route path="/sign-pdf/:id" element={<SignPdf />} />
           <Route path="/sign-pdf/tax-preparer" element={<TaxPreparerSign />} />
           <Route path="/admin" element={<AdminPortal />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

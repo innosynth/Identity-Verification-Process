@@ -10,10 +10,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from '../components/ui/input';
 import { PDFViewer, pdf } from '@react-pdf/renderer';
 import { PdfWithMetadataSignatures } from '../components/pdf/PdfWithSignatures';
+import { useParams, useLocation } from 'react-router-dom';
 
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://identity-verification-process.vercel.app';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 //const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 
@@ -34,6 +35,10 @@ const PdfDropArea = ({ children, pdfDropRef, isOverPdf }: any) => {
 };
 
 const SignPdf = () => {
+  const { id } = useParams<{ id: string }>(); // Read envelope ID from URL path
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const token = queryParams.get('token') || '';
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -59,6 +64,56 @@ const SignPdf = () => {
   const pdfPageRef = useRef<HTMLDivElement>(null);
   // Add a ref for the actual PDF canvas
   const pdfCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Load session data based on ID and token
+  useEffect(() => {
+    if (id && token) {
+      setIsLoading(true);
+      fetch(`${API_URL}/api/signing-session/${id}`, {
+        headers: {
+          'x-api-key': import.meta.env.VITE_API_KEY || 'your-api-key'
+        }
+      })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          console.log('Session data loaded:', data);
+          const session = data.session;
+          if (session && session.documents && session.documents.length > 0) {
+            const docUrl = session.documents[0].url;
+            console.log('Fetching document from URL:', docUrl);
+            return fetch(docUrl)
+              .then(res => {
+                if (!res.ok) {
+                  throw new Error(`Failed to fetch document: ${res.status}`);
+                }
+                return res.blob();
+              })
+              .then(blob => {
+                const file = new File([blob], session.documents[0].filename, { type: 'application/pdf' });
+                setPdfFile(file);
+                const previewUrl = URL.createObjectURL(file);
+                setPdfPreviewUrl(previewUrl);
+                setPdfUrl(docUrl);
+                setIsLoading(false);
+              });
+          } else {
+            setPdfError('No documents found in this signing session.');
+            setIsLoading(false);
+          }
+        })
+        .catch(error => {
+          console.error('Error loading signing session:', error);
+          setPdfError(`Failed to load signing session: ${error.message}`);
+          setIsLoading(false);
+        });
+    }
+  }, [id, token]);
+
   // Helper to set the canvas ref after Page renders
   useEffect(() => {
     if (pdfPageRef.current) {
@@ -491,29 +546,31 @@ const SignPdf = () => {
             <h1 className="text-4xl font-extrabold mb-2 text-center text-blue-900 tracking-tight mt-6">Sign PDF Document</h1>
             <p className="text-gray-500 mb-8 text-center max-w-lg">Upload your PDF, add e-signatures, and send it securely. Drag the signature to the desired position on the document.</p>
 
-              {/* Upload area */}
-              <div
-                className={`w-full max-w-lg mb-8 transition-all duration-300 ${pdfPreviewUrl ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}
-              >
+              {/* Upload area - only show if no PDF is loaded and no ID/token in URL */}
+              {!id && !token && !pdfPreviewUrl && (
                 <div
-                  className="flex flex-col items-center justify-center border-2 border-dashed border-blue-300 rounded-xl bg-blue-50 hover:bg-blue-100 cursor-pointer py-10 px-6 transition-colors duration-200 relative"
-                  onClick={() => document.getElementById('pdf-upload')?.click()}
-                  tabIndex={0}
-                  onKeyDown={e => { if (e.key === 'Enter') document.getElementById('pdf-upload')?.click(); }}
-                  aria-label="Upload PDF"
+                  className={`w-full max-w-lg mb-8 transition-all duration-300 ${pdfPreviewUrl ? 'opacity-40 pointer-events-none' : 'opacity-100'}`}
                 >
-                  <UploadCloud className="w-12 h-12 text-blue-400 mb-2 animate-bounce-slow" />
-                  <span className="font-semibold text-blue-700 text-lg">Click or drag to upload PDF</span>
-                  <span className="text-xs text-gray-400 mt-1">(Only .pdf files are supported)</span>
-                  <input
-                    id="pdf-upload"
-                    type="file"
-                    accept="application/pdf"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
+                  <div
+                    className="flex flex-col items-center justify-center border-2 border-dashed border-blue-300 rounded-xl bg-blue-50 hover:bg-blue-100 cursor-pointer py-10 px-6 transition-colors duration-200 relative"
+                    onClick={() => document.getElementById('pdf-upload')?.click()}
+                    tabIndex={0}
+                    onKeyDown={e => { if (e.key === 'Enter') document.getElementById('pdf-upload')?.click(); }}
+                    aria-label="Upload PDF"
+                  >
+                    <UploadCloud className="w-12 h-12 text-blue-400 mb-2 animate-bounce-slow" />
+                    <span className="font-semibold text-blue-700 text-lg">Click or drag to upload PDF</span>
+                    <span className="text-xs text-gray-400 mt-1">(Only .pdf files are supported)</span>
+                    <input
+                      id="pdf-upload"
+                      type="file"
+                      accept="application/pdf"
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* PDF Preview and Signature Area */}
               <div className="w-full flex flex-col items-center relative px-0 sm:px-4">

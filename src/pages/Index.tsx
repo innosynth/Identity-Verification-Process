@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useParams, useLocation } from "react-router-dom";
 import { VerificationStepper } from "@/components/verification/VerificationStepper";
 import { LandingPage } from "@/components/verification/LandingPage";
 import { CountrySelection } from "@/components/verification/CountrySelection";
@@ -10,7 +11,7 @@ import { ESignature } from "@/components/verification/ESignature";
 import { VerificationComplete } from "@/components/verification/VerificationComplete";
 import { AnimatedBackground } from "@/components/ui/animated-background";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { QRCodeSVG } from 'qrcode.react';
 import { Copy, Check } from "lucide-react";
@@ -72,6 +73,50 @@ const Index = () => {
   const [showDeviceSwitch, setShowDeviceSwitch] = useState(false);
   const [copied, setCopied] = useState(false);
   const [recipientName, setRecipientName] = useState<string>('');
+  const { id } = useParams<{ id: string }>(); // Read session ID from URL path
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const token = queryParams.get('token') || '';
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+  useEffect(() => {
+    if (id && token) {
+      // Load session data based on ID
+      fetch(`${API_URL}/api/signing-session/${id}`, {
+        headers: {
+          'x-api-key': import.meta.env.VITE_ADMIN_API_KEY || 'api_a44ed8187b7eefb29518361d3e2eda69'
+        }
+      })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          const session = data.session;
+          if (session) {
+            sessionStorage.setItem('envelopeId', id);
+            sessionStorage.setItem('recipientName', session.recipient.name);
+            sessionStorage.setItem('recipientEmail', session.recipient.email);
+            setCurrentStep("landing"); // Start at the first step of the verification flow
+            // Set default verification data to prevent undefined errors
+            setVerificationData({
+              documentImages: { front: '', back: '' },
+              selfieVideo: null,
+              signature: { type: 'drawn', data: '' },
+              nameVerified: session.status === 'verified',
+              faceVerified: session.status === 'verified'
+            });
+          }
+        })
+        .catch(error => {
+          console.error('Error loading session:', error, 'Status:', error.message.includes('401') ? 'Unauthorized' : 'Other error');
+          alert('Failed to load signing session. Please try again.');
+          setCurrentStep("landing");
+        });
+    }
+  }, [id, token, API_URL]);
 
   useEffect(() => {
     const savedStep = sessionStorage.getItem("currentStep");
@@ -144,7 +189,14 @@ const Index = () => {
   };
 
   const handleDocumentTypeSelect = (documentType: DocumentType) => {
-    setVerificationData(prev => ({ ...prev, documentType }));
+    setVerificationData(prev => ({ 
+      ...prev, 
+      documentType: {
+        id: documentType.id,
+        name: documentType.name,
+        icon: 'document-icon' // Default icon value to satisfy type requirement
+      }
+    }));
     setCurrentStep("terms");
   };
 
@@ -172,7 +224,7 @@ const Index = () => {
         const envelopeId = sessionStorage.getItem('envelopeId');
         if (envelopeId) {
           try {
-            const response = await fetch(`http://localhost:3000/api/envelope/${envelopeId}/verify`, {
+            const response = await fetch(`${API_URL}/api/envelope/${envelopeId}/verify`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -214,7 +266,7 @@ const Index = () => {
         const envelopeId = sessionStorage.getItem('envelopeId');
         if (envelopeId) {
           try {
-            const response = await fetch(`http://localhost:3000/api/envelope/${envelopeId}/verify`, {
+            const response = await fetch(`${API_URL}/api/envelope/${envelopeId}/verify`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -229,7 +281,7 @@ const Index = () => {
             if (result.status === 'verified') {
               createEnvelope(); // Keep frontend envelope creation for now
               // Prepare envelope for signing
-              const prepareResponse = await fetch(`http://localhost:3000/api/envelope/${envelopeId}/prepare`, {
+              const prepareResponse = await fetch(`${API_URL}/api/envelope/${envelopeId}/prepare`, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -283,7 +335,7 @@ const Index = () => {
     // Update envelope status to signed
     const envelopeId = sessionStorage.getItem('envelopeId');
     if (envelopeId) {
-      fetch(`http://localhost:3000/api/envelope/${envelopeId}/status`, {
+      fetch(`${API_URL}/api/envelope/${envelopeId}/status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -318,7 +370,7 @@ const Index = () => {
     // Simulate DocuSign 'signing incomplete' event
     const envelopeId = sessionStorage.getItem('envelopeId');
     if (envelopeId) {
-      fetch(`http://localhost:3000/api/envelope/${envelopeId}/status`, {
+      fetch(`${API_URL}/api/envelope/${envelopeId}/status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

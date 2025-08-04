@@ -80,7 +80,14 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
     }));
 
     stopCamera();
-    processImageForText(imageDataUrl);
+    // Only process the front side for name verification
+    if (currentSide === "front") {
+      processImageForText(imageDataUrl);
+    } else {
+      // For back side, just store the image, do not call the API
+      setExtractedText(null);
+      setNameMatchError(false);
+    }
   };
 
   const processImageForText = async (imageUrl: string) => {
@@ -91,8 +98,14 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
       formData.append('documentImage', dataURItoBlob(imageUrl));
       formData.append('recipientName', recipientName);
 
-      const response = await fetch('http://localhost:3000/api/verify/document-name', {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      const API_KEY = import.meta.env.VITE_ADMIN_API_KEY || 'api_a44ed8187b7eefb29518361d3e2eda69';
+
+      const response = await fetch(`${API_URL}/api/verify/document-name`, {
         method: 'POST',
+        headers: {
+          'x-api-key': API_KEY
+        },
         body: formData,
       });
 
@@ -101,7 +114,7 @@ export const DocumentCapture = ({ documentType, onCaptureComplete, onBack }: Doc
       }
 
       const result = await response.json();
-      setExtractedText(result.nameVerified ? 'Name verified' : 'Name mismatch');
+      setExtractedText(result.nameVerified ? 'Name verified' : `Name mismatch: ${result.reason || 'Unknown reason'}`);
       setNameMatchError(!result.nameVerified);
       sessionStorage.setItem('nameMatchError', (!result.nameVerified).toString());
     } catch (error) {
