@@ -26,13 +26,14 @@ const API_KEY = import.meta.env.VITE_ADMIN_API_KEY;
 
 // Component for placed signatures that can be dragged within PDF
 const PlacedSignature = ({ signature, index, pageDimensions, pdfPageRef, onRemove }: any) => {
-  const { attributes, listeners, setNodeRef, transform } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: `placed-signature-${index}`,
     data: { signatureIndex: index, signatureData: signature.signature },
   });
 
   const style = {
     transform: CSS.Translate.toString(transform),
+    opacity: isDragging ? 0.5 : 1,
   };
 
   // Calculate render position based on page dimensions
@@ -49,18 +50,26 @@ const PlacedSignature = ({ signature, index, pageDimensions, pdfPageRef, onRemov
         zIndex: 10,
         ...style 
       }}
-      className="bg-white/90 border border-blue-200 rounded shadow p-2 flex flex-col items-center cursor-move"
+      className="bg-blue-100 border-2 border-blue-400 rounded-lg shadow-lg p-3 flex flex-col items-center cursor-move hover:bg-blue-200 transition-colors"
       {...listeners}
       {...attributes}
     >
-      <img src={signature.signature.signature} alt="Signature" className="w-32 h-16 object-contain" />
-      <div className="text-xs text-gray-500 mt-1">
+      <img src={signature.signature.signature} alt="Signature" className="w-32 h-16 object-contain mb-2" />
+      <div className="text-xs text-blue-700 text-center">
         <div><strong>Signed by:</strong> {signature.signature.name}</div>
         <div><strong>IP:</strong> {signature.signature.ipAddress}</div>
         <div><strong>Date:</strong> {new Date(signature.signature.timestamp).toLocaleString()}</div>
       </div>
-      <Button size="icon" variant="ghost" className="mt-1" onClick={() => onRemove(index)}>
-        ×
+      <Button 
+        size="sm" 
+        variant="ghost" 
+        className="mt-2 text-blue-600 hover:text-red-600 hover:bg-red-50" 
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove(index);
+        }}
+      >
+        Remove
       </Button>
     </div>
   );
@@ -292,48 +301,62 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
 
   // Helper to get drop coordinates relative to PDF
   function handleDragEnd(event: any) {
-    const { over, active, activatorEvent } = event;
+    const { over, active, delta } = event;
     const signatureData = active.data?.current?.signatureData;
     const signatureIndex = active.data?.current?.signatureIndex;
     
     if (over && over.id === 'pdf-drop-area' && pdfPageRef.current) {
       const pageRect = pdfPageRef.current.getBoundingClientRect();
-      const clientX = activatorEvent?.clientX;
-      const clientY = activatorEvent?.clientY;
       
-      if (clientX !== undefined && clientY !== undefined) {
-        // Calculate position relative to the PDF page (not the drop area)
-        let x = clientX - pageRect.left;
-        let y = clientY - pageRect.top;
-        
-        // Scale coordinates to PDF dimensions if available
-        if (pageDimensions.width > 0 && pageDimensions.height > 0) {
-          const renderedWidth = pageRect.width;
-          const renderedHeight = pageRect.height;
+      if (signatureIndex !== undefined) {
+        // Moving existing signature - use delta for precise positioning
+        const currentSig = signaturesOnPages[signatureIndex];
+        if (currentSig) {
+          // Convert current position to screen coordinates
+          const currentScreenX = (currentSig.position.x / pageDimensions.width) * pageRect.width;
+          const currentScreenY = (currentSig.position.y / pageDimensions.height) * pageRect.height;
           
-          x = (x / renderedWidth) * pageDimensions.width;
-          y = (y / renderedHeight) * pageDimensions.height;
-        }
-        
-        // Clamp to reasonable bounds
-        const signatureWidth = 128;
-        const signatureHeight = 80; // Increased to accommodate metadata
-        
-        const maxWidth = pageDimensions.width > 0 ? pageDimensions.width : pageRect.width;
-        const maxHeight = pageDimensions.height > 0 ? pageDimensions.height : pageRect.height;
-        
-        x = Math.max(10, Math.min(x, maxWidth - signatureWidth - 10));
-        y = Math.max(10, Math.min(y, maxHeight - signatureHeight - 10));
-        
-        if (signatureIndex !== undefined) {
-          // Moving existing signature
+          // Apply delta movement
+          const newScreenX = currentScreenX + delta.x;
+          const newScreenY = currentScreenY + delta.y;
+          
+          // Convert back to PDF coordinates
+          let newX = (newScreenX / pageRect.width) * pageDimensions.width;
+          let newY = (newScreenY / pageRect.height) * pageDimensions.height;
+          
+          // Only clamp to prevent going completely off-page
+          const signatureWidth = 128;
+          const signatureHeight = 80;
+          newX = Math.max(0, Math.min(newX, pageDimensions.width - signatureWidth));
+          newY = Math.max(0, Math.min(newY, pageDimensions.height - signatureHeight));
+          
           setSignaturesOnPages(prev => prev.map((sig, idx) => 
             idx === signatureIndex 
-              ? { ...sig, position: { x, y }, page: pageNumber }
+              ? { ...sig, position: { x: newX, y: newY }, page: pageNumber }
               : sig
           ));
-        } else if (signatureData) {
-          // Adding new signature
+        }
+      } else if (signatureData && event.activatorEvent) {
+        // Adding new signature from drag - use exact drop position
+        const clientX = event.activatorEvent.clientX;
+        const clientY = event.activatorEvent.clientY;
+        
+        if (clientX !== undefined && clientY !== undefined) {
+          let x = clientX - pageRect.left;
+          let y = clientY - pageRect.top;
+          
+          // Scale coordinates to PDF dimensions
+          if (pageDimensions.width > 0 && pageDimensions.height > 0) {
+            x = (x / pageRect.width) * pageDimensions.width;
+            y = (y / pageRect.height) * pageDimensions.height;
+          }
+          
+          // Only clamp to prevent going completely off-page
+          const signatureWidth = 128;
+          const signatureHeight = 80;
+          x = Math.max(0, Math.min(x, pageDimensions.width - signatureWidth));
+          y = Math.max(0, Math.min(y, pageDimensions.height - signatureHeight));
+          
           setSignaturesOnPages(prev => [
             ...prev,
             { page: pageNumber, position: { x, y }, signature: signatureData },
@@ -388,7 +411,7 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
       return;
     }
     if (signaturesOnPages.length === 0) {
-      setErrorMessage('Please place your signature on the document by clicking "Sign Here" or dragging it.');
+      setErrorMessage('Please place your signature on at least one page.');
       return;
     }
     if (!pdfFile || !numPages) return;
@@ -489,8 +512,6 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
 
   // Modern UI starts here
   const [isMobile, setIsMobile] = useState(false);
-  const [tapToPlaceMode, setTapToPlaceMode] = useState<null | 'user' | 'preparer'>(null);
-  const [pendingSignatureData, setPendingSignatureData] = useState<SignatureData | null>(null);
   const [pdfContainerWidth, setPdfContainerWidth] = useState<number | undefined>(undefined);
   const pdfResponsiveContainerRef = useRef<HTMLDivElement>(null);
 
@@ -518,34 +539,33 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
 
 
 
-  // PDF click handler for tap-to-place
+  // PDF click handler for tap-to-place (mobile)
   function handlePdfClick(event: React.MouseEvent<HTMLDivElement, MouseEvent>) {
-    if (!isMobile || !tapToPlaceMode || !pendingSignatureData) return;
+    if (!userSignature || signaturesOnPages.some(sig => sig.page === pageNumber)) return;
+    
     // Get click coordinates relative to PDF
     const pdfRect = pdfPageRef.current?.getBoundingClientRect();
     if (!pdfRect) return;
+    
     let x = event.clientX - pdfRect.left;
     let y = event.clientY - pdfRect.top;
+    
     // Scale to PDF dimensions
-    if (pageDimensions.width > 0 && pageDimensions.height > 0 && pdfPageRef.current) {
-      const renderedWidth = pdfPageRef.current.clientWidth;
-      const renderedHeight = pdfPageRef.current.clientHeight;
-      x = (x / renderedWidth) * pageDimensions.width;
-      y = (y / renderedHeight) * pageDimensions.height;
+    if (pageDimensions.width > 0 && pageDimensions.height > 0) {
+      x = (x / pdfRect.width) * pageDimensions.width;
+      y = (y / pdfRect.height) * pageDimensions.height;
     }
-    // Clamp
+    
+    // Only clamp to prevent going completely off-page
     const signatureWidth = 128;
-    const signatureHeight = 64;
-    const maxWidth = pageDimensions.width > 0 ? pageDimensions.width : pdfRect.width;
-    const maxHeight = pageDimensions.height > 0 ? pageDimensions.height : pdfRect.height;
-    x = Math.max(0, Math.min(x, maxWidth - signatureWidth));
-    y = Math.max(0, Math.min(y, maxHeight - signatureHeight));
+    const signatureHeight = 80;
+    x = Math.max(0, Math.min(x, pageDimensions.width - signatureWidth));
+    y = Math.max(0, Math.min(y, pageDimensions.height - signatureHeight));
+    
     setSignaturesOnPages(prev => [
       ...prev,
-      { page: pageNumber, position: { x, y }, signature: pendingSignatureData },
+      { page: pageNumber, position: { x, y }, signature: userSignature },
     ]);
-    setTapToPlaceMode(null);
-    setPendingSignatureData(null);
   }
 
 
@@ -713,7 +733,7 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                           ref={pdfPageRef}
                           style={{ position: 'relative', width: '100%', height: '100%', maxWidth: isMobile ? '100vw' : undefined }}
                           className="mx-auto max-w-full sm:max-w-2xl"
-                          onClick={isMobile && tapToPlaceMode ? handlePdfClick : undefined}
+                          onClick={handlePdfClick}
                         >
                           <Document
                             file={pdfPreviewUrl}
@@ -737,20 +757,16 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                               {pageNumber === 1 && signaturesOnPages.length === 0 && userSignature && (
                                 <div
                                   style={{ position: 'absolute', left: '50%', bottom: '15%', transform: 'translateX(-50%)', zIndex: 5 }}
-                                  className="bg-blue-100 border-2 border-dashed border-blue-400 rounded-lg p-3 text-center w-48 opacity-80 cursor-pointer hover:bg-blue-200"
+                                  className="bg-blue-100 border-2 border-dashed border-blue-400 rounded-lg p-3 text-center w-48 opacity-80 cursor-pointer hover:bg-blue-200 transition-colors"
                                   onClick={() => {
                                     const rect = pdfPageRef.current?.getBoundingClientRect();
-                                    if (rect) {
-                                      const x = (rect.width * 0.5) - 64; // Center horizontally
-                                      const y = (rect.height * 0.85) - 32; // Near bottom
-                                      
-                                      // Scale to PDF dimensions
-                                      const scaledX = (x / rect.width) * pageDimensions.width;
-                                      const scaledY = (y / rect.height) * pageDimensions.height;
+                                    if (rect && pageDimensions.width > 0) {
+                                      const x = pageDimensions.width * 0.5 - 64; // Center horizontally
+                                      const y = pageDimensions.height * 0.85 - 32; // Near bottom
                                       
                                       setSignaturesOnPages(prev => [
                                         ...prev,
-                                        { page: pageNumber, position: { x: scaledX, y: scaledY }, signature: userSignature },
+                                        { page: pageNumber, position: { x, y }, signature: userSignature },
                                       ]);
                                     }
                                   }}
@@ -765,7 +781,7 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                               const globalIdx = signaturesOnPages.findIndex(s => s === sig);
                               return (
                                 <PlacedSignature
-                                  key={globalIdx}
+                                  key={`${globalIdx}-${sig.page}`}
                                   signature={sig}
                                   index={globalIdx}
                                   pageDimensions={pageDimensions}
@@ -778,9 +794,9 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                           {/* DragOverlay for active drag */}
                           <DragOverlay>
                             {active && active.data?.current?.signatureData && (
-                              <div className="bg-yellow-100 border border-yellow-400 rounded shadow p-2 flex flex-col items-center">
+                              <div className="bg-blue-100 border-2 border-blue-400 rounded-lg shadow-lg p-3 flex flex-col items-center opacity-90">
                                 <img src={active.data.current.signatureData.signature} alt="Signature Preview" className="w-32 h-16 object-contain" />
-                                <div className="text-xs text-gray-500 mt-1">
+                                <div className="text-xs text-blue-700 mt-1 text-center">
                                   <div><strong>Signed by:</strong> {active.data.current.signatureData.name}</div>
                                 </div>
                               </div>
@@ -791,16 +807,45 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                     </div>
                     {/* Page navigation */}
                     {numPages && (
-                      <div className="flex items-center justify-center mt-4 gap-2">
-                        <Button onClick={goToPrevPage} disabled={pageNumber <= 1} variant="ghost" size="sm">
-                          Prev
-                        </Button>
-                        <span className="mx-2 text-gray-600 text-sm font-medium">
-                          Page {pageNumber} of {numPages}
-                        </span>
-                        <Button onClick={goToNextPage} disabled={pageNumber >= numPages} variant="ghost" size="sm">
-                          Next
-                        </Button>
+                      <div className="flex flex-col items-center mt-4 gap-2">
+                        <div className="flex items-center gap-2">
+                          <Button onClick={goToPrevPage} disabled={pageNumber <= 1} variant="ghost" size="sm">
+                            Prev
+                          </Button>
+                          <span className="mx-2 text-gray-600 text-sm font-medium">
+                            Page {pageNumber} of {numPages}
+                          </span>
+                          <Button onClick={goToNextPage} disabled={pageNumber >= numPages} variant="ghost" size="sm">
+                            Next
+                          </Button>
+                        </div>
+                        {userSignature && numPages > 1 && (
+                          <Button 
+                            onClick={() => {
+                              const newSignatures = [];
+                              for (let page = 1; page <= numPages; page++) {
+                                if (!signaturesOnPages.some(sig => sig.page === page)) {
+                                  newSignatures.push({
+                                    page,
+                                    position: { x: pageDimensions.width * 0.5 - 64, y: pageDimensions.height * 0.85 - 32 },
+                                    signature: userSignature
+                                  });
+                                }
+                              }
+                              setSignaturesOnPages(prev => [...prev, ...newSignatures]);
+                            }}
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                          >
+                            Sign All Pages
+                          </Button>
+                        )}
+                        {signaturesOnPages.length > 0 && (
+                          <div className="text-xs text-gray-500">
+                            Signed: {signaturesOnPages.length} of {numPages} pages
+                          </div>
+                        )}
                       </div>
                     )}
                     {/* Simplified Actions */}

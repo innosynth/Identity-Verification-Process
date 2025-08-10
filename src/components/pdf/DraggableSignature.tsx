@@ -47,7 +47,7 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
     id: id,
     data: { signatureData: signatureData },
-    disabled: !sidebar || !signatureData || disabled, // Only draggable if in sidebar and signatureData exists and not disabled
+    disabled: (!sidebar && !signatureData) || disabled, // Draggable if in sidebar OR if signatureData exists, unless disabled
   });
 
   const style = sidebar
@@ -71,8 +71,8 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
     <div
       ref={setNodeRef}
       style={style}
-      {...(sidebar && signatureData && !disabled ? { ...listeners, ...attributes } : {})}
-      className={`z-20 max-w-xs w-64 sm:w-72 md:w-80 bg-yellow-50 border-2 border-yellow-300 rounded-xl shadow-xl p-4 flex flex-col items-center animate-fade-in ${sidebar ? (signatureData && !disabled ? 'cursor-move' : '') : 'absolute'}`}
+      {...((sidebar && signatureData && !disabled) || (!sidebar && signatureData) ? { ...listeners, ...attributes } : {})}
+      className={`z-20 max-w-xs w-64 sm:w-72 md:w-80 bg-blue-100 border-2 border-blue-400 rounded-xl shadow-xl p-4 flex flex-col items-center animate-fade-in ${(sidebar && signatureData && !disabled) || (!sidebar && signatureData) ? 'cursor-move' : ''} ${!sidebar ? 'absolute' : ''}`}
     >
       <div className="flex items-center w-full mb-2">
         {sidebar && signatureData && !disabled && (

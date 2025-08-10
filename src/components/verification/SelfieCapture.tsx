@@ -31,12 +31,21 @@ export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieC
     setIsCameraInitializing(true);
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
+        video: { 
+          facingMode: "user",
+          width: { ideal: 1280, min: 640 },
+          height: { ideal: 720, min: 480 },
+          frameRate: { ideal: 30, min: 15 }
+        },
         audio: true
       });
       setStream(mediaStream);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        // Ensure video is playing
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play().catch(console.error);
+        };
       }
     } catch (error) {
       console.error("Error accessing camera:", error);
@@ -57,24 +66,54 @@ export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieC
     if (!stream) return;
 
     chunksRef.current = [];
-    const mediaRecorder = new MediaRecorder(stream);
+    
+    // Try to use a more compatible video format
+    let mimeType = 'video/webm;codecs=vp8';
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = 'video/webm';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/mp4';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = ''; // Let browser choose
+        }
+      }
+    }
+    
+    console.log('Using MediaRecorder with mimeType:', mimeType || 'browser default');
+    
+    const options = mimeType ? { mimeType } : {};
+    const mediaRecorder = new MediaRecorder(stream, options);
     mediaRecorderRef.current = mediaRecorder;
 
     mediaRecorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
+        console.log('MediaRecorder data chunk received, size:', event.data.size);
         chunksRef.current.push(event.data);
       }
     };
 
     mediaRecorder.onstop = () => {
-      const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+      console.log('MediaRecorder stopped, total chunks:', chunksRef.current.length);
+      const totalSize = chunksRef.current.reduce((sum, chunk) => sum + chunk.size, 0);
+      console.log('Total video size:', totalSize, 'bytes');
+      
+      const blob = new Blob(chunksRef.current, { type: mimeType || 'video/webm' });
+      console.log('Created video blob, size:', blob.size, 'type:', blob.type);
+      
       setRecordedBlob(blob);
       setHasRecorded(true);
       stopCamera();
       performFaceMatching(blob);
     };
 
-    mediaRecorder.start();
+    mediaRecorder.onerror = (event) => {
+      console.error('MediaRecorder error:', event);
+      alert('Recording failed. Please try again.');
+      setIsRecording(false);
+    };
+
+    // Start recording with smaller timeslices for better data availability
+    mediaRecorder.start(100); // Request data every 100ms
     setIsRecording(true);
     setRecordingTime(0);
 
@@ -134,61 +173,131 @@ export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieC
       // Extract a frame from the video for face detection
       const videoUrl = URL.createObjectURL(videoBlob);
       const video = document.createElement('video');
-      video.src = videoUrl;
-      await new Promise(resolve => video.onloadedmetadata = resolve);
-      video.currentTime = 1; // Get a frame from 1 second in
-      await new Promise(resolve => video.onseeked = resolve);
+      video.crossOrigin = 'anonymous';
+      video.muted = true;
+      video.playsInline = true;
+      
+      // Wait for video to load completely
+      await new Promise((resolve, reject) => {
+        video.onloadeddata = () => {
+          console.log('Video loaded, duration:', video.duration, 'dimensions:', video.videoWidth, 'x', video.videoHeight);
+          resolve(true);
+        };
+        video.onerror = (e) => {
+          console.error('Video loading error:', e);
+          reject(new Error('Failed to load video'));
+        };
+        video.src = videoUrl;
+      });
+      
+      // Ensure we have valid video dimensions
+      if (video.videoWidth === 0 || video.videoHeight === 0) {
+        throw new Error('Video has invalid dimensions');
+      }
+      
+      // Seek to middle of video for better frame capture
+      const seekTime = Math.min(video.duration / 2, 2.5); // Middle of video or 2.5s, whichever is smaller
+      video.currentTime = seekTime;
+      
+      // Wait for seek to complete
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Video seek timeout'));
+        }, 3000);
+        
+        video.onseeked = () => {
+          clearTimeout(timeout);
+          console.log('Video seeked to time:', video.currentTime);
+          resolve(true);
+        };
+        video.onerror = (e) => {
+          clearTimeout(timeout);
+          console.error('Video seek error:', e);
+          reject(new Error('Failed to seek video'));
+        };
+      });
 
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(video, 0, 0);
-        const selfieImage = canvas.toDataURL('image/jpeg');
-
-        // Load document image from session storage
-        const documentImageData = sessionStorage.getItem('documentFrontImage') || '';
-        if (!documentImageData) {
-          console.error('No document image found for matching');
-          setFaceMatchResult(false);
-          sessionStorage.setItem('faceMatchResult', 'false');
-          setIsFaceMatching(false);
-          return;
+      
+      if (!ctx) {
+        throw new Error('Failed to get canvas context');
+      }
+      
+      // Clear canvas and draw video frame
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      // Check if canvas has actual image data (not just black)
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data;
+      let hasNonBlackPixels = false;
+      
+      // Check every 100th pixel to see if we have non-black content
+      for (let i = 0; i < pixels.length; i += 400) { // RGBA = 4 bytes per pixel, so check every 100th pixel
+        const r = pixels[i];
+        const g = pixels[i + 1];
+        const b = pixels[i + 2];
+        if (r > 10 || g > 10 || b > 10) { // Allow for slight variations from pure black
+          hasNonBlackPixels = true;
+          break;
         }
+      }
+      
+      if (!hasNonBlackPixels) {
+        console.error('Extracted frame is completely black');
+        throw new Error('Video frame extraction resulted in black image');
+      }
+      
+      const selfieImage = canvas.toDataURL('image/jpeg', 0.8);
+      console.log('Successfully extracted frame, data URL length:', selfieImage.length);
+      
+      // Clean up video URL
+      URL.revokeObjectURL(videoUrl);
 
-        // Send images to backend for facial recognition
-        const formData = new FormData();
-        formData.append('selfieImage', dataURItoBlob(selfieImage));
-        formData.append('documentImage', dataURItoBlob(documentImageData));
-        formData.append('envelopeId', envelopeId);
+      // Load document image from session storage
+      const documentImageData = sessionStorage.getItem('documentFrontImage') || '';
+      if (!documentImageData) {
+        console.error('No document image found for matching');
+        setFaceMatchResult(false);
+        sessionStorage.setItem('faceMatchResult', 'false');
+        setIsFaceMatching(false);
+        return;
+      }
 
-        const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-        const API_KEY = import.meta.env.VITE_ADMIN_API_KEY || 'api_a44ed8187b7eefb29518361d3e2eda69';
+      // Send images to backend for facial recognition
+      const formData = new FormData();
+      formData.append('selfieImage', dataURItoBlob(selfieImage));
+      formData.append('documentImage', dataURItoBlob(documentImageData));
+      formData.append('envelopeId', envelopeId);
 
-        const response = await fetch(`${API_URL}/api/verify/face`, {
-          method: 'POST',
-          headers: {
-            'x-api-key': API_KEY
-          },
-          body: formData,
-        });
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      const API_KEY = import.meta.env.VITE_ADMIN_API_KEY || 'api_a44ed8187b7eefb29518361d3e2eda69';
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
+      const response = await fetch(`${API_URL}/api/verify/face`, {
+        method: 'POST',
+        headers: {
+          'x-api-key': API_KEY
+        },
+        body: formData,
+      });
 
-        const result = await response.json();
-        
-        // Add delay before showing result
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        setFaceMatchResult(result.faceVerified);
-        sessionStorage.setItem('faceMatchResult', result.faceVerified.toString());
-        // Store the detailed reason from Gemini API
-        if (result.reason) {
-          sessionStorage.setItem('faceMatchReason', result.reason);
-        }
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      // Add delay before showing result
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      setFaceMatchResult(result.faceVerified);
+      sessionStorage.setItem('faceMatchResult', result.faceVerified.toString());
+      // Store the detailed reason from Gemini API
+      if (result.reason) {
+        sessionStorage.setItem('faceMatchReason', result.reason);
       }
     } catch (error) {
       console.error('Error during face match:', error);
@@ -198,6 +307,7 @@ export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieC
       
       setFaceMatchResult(false);
       sessionStorage.setItem('faceMatchResult', 'false');
+      sessionStorage.setItem('faceMatchReason', `Frame extraction failed: ${error.message}`);
     } finally {
       setIsFaceMatching(false);
       sessionStorage.setItem('faceVerificationProcessing', 'false');
