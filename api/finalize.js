@@ -27,7 +27,12 @@ export default async function handler(req, res) {
       return;
     }
     try {
-      const data = await fs.promises.readFile(file.filepath);
+      const path = require('path');
+      const safePath = path.resolve(file.filepath);
+      if (!safePath.startsWith(process.cwd())) {
+        throw new Error('Invalid file path');
+      }
+      const data = await fs.promises.readFile(safePath);
       const { url } = await put('signed-document.pdf', data, {
         access: 'public',
         token: process.env.BLOB_READ_WRITE_TOKEN,

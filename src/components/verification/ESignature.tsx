@@ -8,10 +8,11 @@ interface ESignatureProps {
   onBack: () => void;
   onSignLater: () => void;
   onDecline: () => void;
+  uploadMode?: boolean;
 }
 
-export const ESignature = ({ onSignatureComplete, onBack, onSignLater, onDecline }: ESignatureProps) => {
-  const [signatureType, setSignatureType] = useState<"drawn" | "uploaded">("drawn");
+export const ESignature = ({ onSignatureComplete, onBack, onSignLater, onDecline, uploadMode }: ESignatureProps) => {
+  const [signatureType, setSignatureType] = useState<"drawn" | "uploaded">(uploadMode ? "uploaded" : "drawn");
   const [signatureData, setSignatureData] = useState<string | null>(null);
   const [isSigning, setIsSigning] = useState(false);
   const [envelope, setEnvelope] = useState<any>(null);
@@ -45,13 +46,18 @@ export const ESignature = ({ onSignatureComplete, onBack, onSignLater, onDecline
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.beginPath();
       ctx.moveTo(x, y);
       setIsSigning(true);
 
       const draw = (moveEvent: MouseEvent) => {
-        if (!isSigning) return;
-        const newRect = canvas.getBoundingClientRect();
+        if (!canvasRef.current) return;
+        const newRect = canvasRef.current.getBoundingClientRect();
         const newX = moveEvent.clientX - newRect.left;
         const newY = moveEvent.clientY - newRect.top;
         ctx.lineTo(newX, newY);
@@ -63,12 +69,12 @@ export const ESignature = ({ onSignatureComplete, onBack, onSignLater, onDecline
         ctx.closePath();
         const dataUrl = canvas.toDataURL("image/png");
         setSignatureData(dataUrl);
-        window.removeEventListener("mousemove", draw);
-        window.removeEventListener("mouseup", stop);
+        document.removeEventListener("mousemove", draw);
+        document.removeEventListener("mouseup", stop);
       };
 
-      window.addEventListener("mousemove", draw);
-      window.addEventListener("mouseup", stop);
+      document.addEventListener("mousemove", draw);
+      document.addEventListener("mouseup", stop);
     }
   };
 
@@ -112,31 +118,43 @@ export const ESignature = ({ onSignatureComplete, onBack, onSignLater, onDecline
       </div>
 
       <Card className="p-6 mb-6">
-        <div className="flex justify-center space-x-4 mb-6">
-          <Button
-            variant={signatureType === "drawn" ? "default" : "outline"}
-            onClick={() => setSignatureType("drawn")}
-          >
-            <PenTool className="w-4 h-4 mr-2" />
-            Draw Signature
-          </Button>
-          <Button
-            variant={signatureType === "uploaded" ? "default" : "outline"}
-            onClick={() => setSignatureType("uploaded")}
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Upload Signature
-          </Button>
-        </div>
+        {!uploadMode && (
+          <div className="flex justify-center space-x-4 mb-6">
+            <Button
+              variant={signatureType === "drawn" ? "default" : "outline"}
+              onClick={() => setSignatureType("drawn")}
+            >
+              <PenTool className="w-4 h-4 mr-2" />
+              Draw Signature
+            </Button>
+            <Button
+              variant={signatureType === "uploaded" ? "default" : "outline"}
+              onClick={() => setSignatureType("uploaded")}
+            >
+              <Upload className="w-4 h-4 mr-2" />
+              Upload Signature
+            </Button>
+          </div>
+        )}
 
-        {signatureType === "drawn" ? (
+        {(signatureType === "drawn" && !uploadMode) ? (
           <div className="border border-dashed border-muted rounded-lg p-4 relative bg-white">
             <canvas
               ref={canvasRef}
               onMouseDown={startDrawing}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const mouseEvent = new MouseEvent('mousedown', {
+                  clientX: touch.clientX,
+                  clientY: touch.clientY
+                });
+                startDrawing(mouseEvent as any);
+              }}
               width={500}
               height={200}
-              className="w-full h-full touch-none"
+              className="w-full h-full"
+              style={{ touchAction: 'none' }}
             />
             {!signatureData && (
               <p className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm pointer-events-none">

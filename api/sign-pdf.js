@@ -13,6 +13,12 @@ export default async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+  
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey || apiKey !== process.env.VITE_ADMIN_API_KEY) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
   const form = new IncomingForm();
   form.parse(req, async (err, fields, files) => {
     if (err) {

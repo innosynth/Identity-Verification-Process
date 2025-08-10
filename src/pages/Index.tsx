@@ -73,6 +73,7 @@ const Index = () => {
   const [showDeviceSwitch, setShowDeviceSwitch] = useState(false);
   const [copied, setCopied] = useState(false);
   const [recipientName, setRecipientName] = useState<string>('');
+  const [sessionLoaded, setSessionLoaded] = useState(false);
   const { id } = useParams<{ id: string }>(); // Read session ID from URL path
   const location = useLocation();
   const queryParams = new URLSearchParams(location.search);
@@ -119,45 +120,79 @@ const Index = () => {
             sessionStorage.setItem('envelopeId', sessionId);
             sessionStorage.setItem('recipientName', session.recipient.name);
             sessionStorage.setItem('recipientEmail', session.recipient.email);
-            setCurrentStep("landing"); // Start at the first step of the verification flow
-            // Set default verification data to prevent undefined errors
-            setVerificationData({
-              documentImages: { front: '', back: '' },
-              selfieVideo: null,
-              signature: { type: 'drawn', data: '' },
-              nameVerified: session.status === 'verified',
-              faceVerified: session.status === 'verified'
-            });
+            
+            // Check if user has already started verification (has saved progress)
+            const savedStep = sessionStorage.getItem("currentStep");
+            const hasProgress = savedStep && savedStep !== "landing";
+            
+            // Determine step based on session status and saved progress
+            if (session.status === 'completed') {
+              setCurrentStep("signature"); // Go directly to signature page which handles completed state
+            } else if (session.status === 'verified') {
+              setCurrentStep("signature"); // Ready for signing
+            } else if (hasProgress) {
+              // User has progress, continue from where they left off
+              setCurrentStep(savedStep as VerificationStep);
+            } else {
+              // Fresh session, start verification flow
+              setCurrentStep("landing");
+            }
+            
+            // Set verification data based on session status
+            if (session.status === 'completed' || session.status === 'verified') {
+              setVerificationData({
+                documentImages: { front: '', back: '' },
+                selfieVideo: null,
+                signature: { type: 'drawn', data: '' },
+                nameVerified: true,
+                faceVerified: true
+              });
+            } else {
+              // For pending sessions, start with empty verification data or load saved data
+              const savedData = sessionStorage.getItem("verificationData");
+              if (savedData && hasProgress) {
+                const parsedData = JSON.parse(savedData);
+                if (parsedData.selfieVideo) {
+                  delete parsedData.selfieVideo; // Don't restore video
+                }
+                setVerificationData(parsedData);
+              } else {
+                setVerificationData({});
+              }
+            }
           }
+          setSessionLoaded(true);
         })
         .catch(error => {
           console.error('Error loading session:', error, 'Status:', error.message.includes('401') ? 'Unauthorized' : 'Other error');
           alert('Failed to load signing session. Please try again.');
           setCurrentStep("landing");
+          setSessionLoaded(true);
         });
     }
   }, [sessionId, token, API_URL]);
 
   useEffect(() => {
-    const savedStep = sessionStorage.getItem("currentStep");
-    const savedData = sessionStorage.getItem("verificationData");
-    const savedName = sessionStorage.getItem("recipientName");
-    if (savedStep) {
-      setCurrentStep(savedStep as VerificationStep);
-    }
-    if (savedData) {
-      const parsedData = JSON.parse(savedData);
-      if (parsedData.selfieVideo) {
-        // The selfie video is not stored in sessionStorage, so we don't load it.
-        // The user will have to re-record the video.
-        delete parsedData.selfieVideo;
+    // Only load from sessionStorage if no session is being loaded from URL
+    if (!sessionId || !token) {
+      const savedStep = sessionStorage.getItem("currentStep");
+      const savedData = sessionStorage.getItem("verificationData");
+      const savedName = sessionStorage.getItem("recipientName");
+      if (savedStep) {
+        setCurrentStep(savedStep as VerificationStep);
       }
-      setVerificationData(parsedData);
+      if (savedData) {
+        const parsedData = JSON.parse(savedData);
+        if (parsedData.selfieVideo) {
+          delete parsedData.selfieVideo;
+        }
+        setVerificationData(parsedData);
+      }
+      if (savedName) {
+        setRecipientName(savedName);
+      }
     }
-    if (savedName) {
-      setRecipientName(savedName);
-    }
-  }, []);
+  }, [sessionId, token]);
 
   useEffect(() => {
     const dataToSave = { ...verificationData };
@@ -252,19 +287,39 @@ const Index = () => {
       selfieVideo: videoBlob,
       faceVerified: false // Reset verification status
     }));
-    setTimeout(() => {
-      const faceVerified = sessionStorage.getItem('faceMatchResult') === 'true';
-      setVerificationData(prev => ({
-        ...prev,
-        faceVerified
-      }));
-      if (faceVerified && verificationData.nameVerified) {
-        setCurrentStep("signature");
-      } else {
-        alert('Face verification failed. Please retry.');
-        setCurrentStep("selfie-capture");
+    
+    // Wait for face verification to complete by polling sessionStorage
+    const checkFaceVerification = () => {
+      const faceMatchResult = sessionStorage.getItem('faceMatchResult');
+      const isProcessing = sessionStorage.getItem('faceVerificationProcessing');
+      
+      if (isProcessing === 'true') {
+        // Still processing, check again in 500ms
+        setTimeout(checkFaceVerification, 500);
+        return;
       }
-    }, 1000);
+      
+      if (faceMatchResult !== null) {
+        const faceVerified = faceMatchResult === 'true';
+        setVerificationData(prev => ({
+          ...prev,
+          faceVerified
+        }));
+        
+        if (faceVerified && verificationData.nameVerified) {
+          setCurrentStep("signature");
+        } else {
+          alert('Face verification failed. Please retry.');
+          setCurrentStep("selfie-capture");
+        }
+      } else {
+        // No result yet, check again
+        setTimeout(checkFaceVerification, 500);
+      }
+    };
+    
+    // Start checking after a brief delay
+    setTimeout(checkFaceVerification, 500);
   };
 
   const handleRestart = () => {
@@ -354,15 +409,26 @@ const Index = () => {
             )}
 
             {currentStep === "signature" && (
-              <SignPdf id={sessionId} token={token} onBack={handleBack} onComplete={() => setCurrentStep("complete")}/>
+              <SignPdf id={sessionId} token={token} onBack={handleBack} onComplete={() => setCurrentStep("complete")} />
             )}
 
             {currentStep === "complete" && (
-              <VerificationComplete
-                onRestart={handleRestart}
-                onHome={handleRestart}
-                verificationData={verificationData}
-              />
+              <div className="flex-1 flex flex-col items-center justify-center w-full max-w-2xl bg-white/90 rounded-2xl shadow-2xl p-8 border border-blue-100 animate-fade-in mt-8">
+                <div className="text-center">
+                  <div className="inline-flex items-center justify-center w-20 h-20 bg-green-100 rounded-full mb-6">
+                    <svg className="w-12 h-12 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                  <h1 className="text-3xl font-bold text-green-600 mb-2">Process Complete!</h1>
+                  <p className="text-gray-600 mb-6">
+                    Your document has been successfully signed and is ready for download.
+                  </p>
+                  <Button onClick={handleRestart} variant="outline" className="px-6 py-2">
+                    Start New Session
+                  </Button>
+                </div>
+              </div>
             )}
           </div>
         </div>

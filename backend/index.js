@@ -5,13 +5,48 @@ const multer = require('multer');
 const cors = require('cors');
 const { put } = require('@vercel/blob');
 const crypto = require('crypto');
+const helmet = require('helmet');
+const bcrypt = require('bcrypt');
+const axios = require('axios');
+const EventEmitter = require('events');
+const path = require('path');
+
+// Input sanitization function
+const sanitizeForLog = (input) => {
+  if (typeof input !== 'string') return input;
+  return input.replace(/[\r\n\t]/g, '').substring(0, 200);
+};
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+}));
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:8080',
+  credentials: true
+}));
+app.use(express.json({ limit: '10mb' }));
+
+// CSRF protection middleware
+app.use((req, res, next) => {
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE') {
+    const token = req.headers['x-csrf-token'];
+    if (!token && process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: 'CSRF token required' });
+    }
+  }
+  next();
+});
 
 // Middleware to enforce HTTPS
 app.use((req, res, next) => {
@@ -33,7 +68,7 @@ const authenticateApiKey = async (req, res, next) => {
     const result = await pool.query(keyQuery);
     let validKey = false;
     for (const row of result.rows) {
-      if (require('bcrypt').compareSync(apiKey, row.key_hash)) {
+      if (bcrypt.compareSync(apiKey, row.key_hash)) {
         validKey = true;
         req.apiKeyId = row.id;
         break;
@@ -70,8 +105,10 @@ pool.query('SELECT NOW()', (err, res) => {
 const logAuditEvent = async (eventType, userId, ipAddress, details) => {
   try {
     const auditQuery = 'INSERT INTO audit_logs (event_type, user_id, ip_address, details) VALUES ($1, $2, $3, $4)';
-    await pool.query(auditQuery, [eventType, userId, ipAddress, JSON.stringify(details)]);
-    console.log(`Audit event logged: ${eventType} by user ${userId} from IP ${ipAddress}`);
+    // Validate details object before serialization
+    const safeDetails = typeof details === 'object' && details !== null ? details : {};
+    await pool.query(auditQuery, [eventType, userId, ipAddress, JSON.stringify(safeDetails)]);
+    console.log('Audit event logged:', { eventType, userId, ipAddress: sanitizeForLog(ipAddress) });
   } catch (error) {
     console.error('Error logging audit event:', error);
   }
@@ -140,6 +177,18 @@ const createTables = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         expires_at TIMESTAMP
       )
+    `);
+    
+    // Ensure CASCADE constraints are properly set
+    await pool.query(`
+      ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_recipient_id_fkey;
+      ALTER TABLE documents ADD CONSTRAINT documents_recipient_id_fkey 
+        FOREIGN KEY (recipient_id) REFERENCES recipients(id) ON DELETE CASCADE;
+    `);
+    await pool.query(`
+      ALTER TABLE signatures DROP CONSTRAINT IF EXISTS signatures_envelope_id_fkey;
+      ALTER TABLE signatures ADD CONSTRAINT signatures_envelope_id_fkey 
+        FOREIGN KEY (envelope_id) REFERENCES envelopes(id) ON DELETE CASCADE;
     `);
     console.log('Envelopes table created or already exists.');
     // Add missing columns if they do not exist
@@ -256,13 +305,11 @@ const createTables = async () => {
 createTables();
 
 // Internal Event Dispatcher
-const EventEmitter = require('events');
 const eventEmitter = new EventEmitter();
-const axios = require('axios');
 
 // Event listener for internal processing before webhook dispatch
 eventEmitter.on('event', async (eventType, data) => {
-  console.log(`Internal event processed: ${eventType}`, data);
+  console.log('Internal event processed:', { eventType, data });
   // TODO: Add additional internal processing logic here (e.g., logging, analytics)
   await triggerWebhooks(eventType, data);
 });
@@ -272,12 +319,40 @@ const dispatchEvent = (eventType, data) => {
   eventEmitter.emit('event', eventType, data);
 };
 
+// Predefined verification workflows
+const verificationWorkflows = {
+  'WF_STANDARD': { 
+    name: 'Standard Verification',
+    steps: ['document', 'face'], 
+    strictness: 'high',
+    nameMatchRequired: true,
+    faceMatchRequired: true
+  },
+  'WF_DOCUMENT_ONLY': { 
+    name: 'Document Only',
+    steps: ['document'], 
+    strictness: 'medium',
+    nameMatchRequired: true,
+    faceMatchRequired: false
+  },
+  'WF_BASIC': { 
+    name: 'Basic Verification',
+    steps: ['document', 'face'], 
+    strictness: 'low',
+    nameMatchRequired: false,
+    faceMatchRequired: true
+  }
+};
+
 // Endpoint for uploading documents and saving recipient data
 app.post('/api/signing-session', authenticateApiKey, upload.array('documents'), async (req, res) => {
-  const { recipientName, recipientEmail } = req.body;
+  const { recipientName, recipientEmail, workflowId = 'WF_STANDARD' } = req.body;
   const files = req.files;
 
+  console.log('Creating signing session:', { recipientName, recipientEmail, fileCount: files?.length });
+
   if (!recipientName || !recipientEmail || !files || files.length === 0) {
+    console.error('Missing required fields or documents');
     return res.status(400).json({ error: 'Missing required fields or documents' });
   }
 
@@ -286,6 +361,7 @@ app.post('/api/signing-session', authenticateApiKey, upload.array('documents'), 
     const recipientQuery = 'INSERT INTO recipients (name, email) VALUES ($1, $2) RETURNING id';
     const recipientResult = await pool.query(recipientQuery, [recipientName, recipientEmail]);
     const recipientId = recipientResult.rows[0].id;
+    console.log('Recipient created with ID:', recipientId);
 
     // Log audit event for session creation
     const ipAddress = req.ip || req.connection.remoteAddress;
@@ -293,8 +369,16 @@ app.post('/api/signing-session', authenticateApiKey, upload.array('documents'), 
 
     // Save files to Vercel Blob storage with encryption
     const documentUrls = [];
-    const encryptionKey = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex'); // Use environment variable or generate a key
+    const encryptionKey = process.env.ENCRYPTION_KEY;
+    
+    if (!encryptionKey) {
+      console.error('Encryption key not configured');
+      return res.status(500).json({ error: 'Server configuration error' });
+    }
+    
     for (const file of files) {
+      console.log('Processing file:', file.originalname, 'Size:', file.buffer.length);
+      
       // Encrypt file content using AES-256-GCM
       const iv = crypto.randomBytes(16); // Initialization vector
       const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(encryptionKey, 'hex'), iv);
@@ -302,38 +386,62 @@ app.post('/api/signing-session', authenticateApiKey, upload.array('documents'), 
       encrypted = Buffer.concat([encrypted, cipher.final()]);
       const authTag = cipher.getAuthTag();
 
-      // Combine IV, auth tag, and encrypted data for storage
-      const encryptedData = Buffer.concat([iv, authTag, encrypted]);
+      // Store encrypted data directly (not combined with IV and authTag)
+      const encryptedData = encrypted;
 
-      // Upload to Vercel Blob
+      // Upload to Vercel Blob with proper token
+      const cleanToken = process.env.BLOB_READ_WRITE_TOKEN.replace(/["']/g, '');
       const blob = await put(
         `${Date.now()}-${file.originalname}`,
         encryptedData,
         {
           access: 'public',
-          token: process.env.BLOB_READ_WRITE_TOKEN,
+          token: cleanToken,
         }
       );
       const blobUrl = blob.url;
       documentUrls.push(blobUrl);
+      console.log('File uploaded to blob storage:', blobUrl);
 
-      // Save document metadata to database (store encryption details if needed)
-      const docQuery = 'INSERT INTO documents (recipient_id, filename, url, encryption_iv, encryption_auth_tag) VALUES ($1, $2, $3, $4, $5)';
-      await pool.query(docQuery, [recipientId, file.originalname, blobUrl, iv.toString('hex'), authTag.toString('hex')]);
+      // Save document metadata to database (store encryption details separately)
+      const docQuery = 'INSERT INTO documents (recipient_id, filename, url, encryption_iv, encryption_auth_tag) VALUES ($1, $2, $3, $4, $5) RETURNING id';
+      const docResult = await pool.query(docQuery, [recipientId, file.originalname, blobUrl, iv.toString('hex'), authTag.toString('hex')]);
+      console.log('Document metadata saved with ID:', docResult.rows[0].id);
     }
 
-    // Create an envelope for the uploaded documents with expiration time
+    // Validate workflow ID
+    const workflow = verificationWorkflows[workflowId];
+    if (!workflow) {
+      console.error('Invalid workflow ID:', workflowId);
+      return res.status(400).json({ error: 'Invalid workflow ID' });
+    }
+
+    // Create an envelope for the uploaded documents with expiration time and workflow
     const envelopeId = `ENV-${Date.now()}`;
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // Expires in 7 days
-    const envelopeQuery = 'INSERT INTO envelopes (id, recipient_id, status, expires_at) VALUES ($1, $2, $3, $4)';
-    await pool.query(envelopeQuery, [envelopeId, recipientId, 'pending', expiresAt]);
+    
+    // Add workflow_id column to envelopes table if not exists
+    try {
+      await pool.query('ALTER TABLE envelopes ADD COLUMN IF NOT EXISTS workflow_id VARCHAR(50)');
+    } catch (alterError) {
+      console.log('Workflow column may already exist');
+    }
+    
+    const envelopeQuery = 'INSERT INTO envelopes (id, recipient_id, status, expires_at, workflow_id) VALUES ($1, $2, $3, $4, $5)';
+    await pool.query(envelopeQuery, [envelopeId, recipientId, 'pending', expiresAt, workflowId]);
+    console.log('Envelope created with ID:', envelopeId);
 
     res.status(201).json({
       message: 'Signing session created successfully',
       sessionId: envelopeId,
       recipientId,
       documentUrls,
-      expiresAt
+      expiresAt,
+      workflow: {
+        id: workflowId,
+        name: workflow.name,
+        steps: workflow.steps
+      }
     });
   } catch (error) {
     console.error('Error creating signing session:', error.stack);
@@ -343,19 +451,30 @@ app.post('/api/signing-session', authenticateApiKey, upload.array('documents'), 
 
 // Basic endpoint to check server status
 app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'OK' });
+  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+
+
+// Endpoint to get available workflows
+app.get('/api/workflows', authenticateApiKey, (req, res) => {
+  res.status(200).json({ workflows: verificationWorkflows });
 });
 
 // Endpoint to get envelope status
 app.get('/api/signing-session/:id', authenticateApiKey, async (req, res) => {
   const { id } = req.params;
+  console.log('Fetching signing session for ID:', id);
+  
   try {
     const envelopeQuery = 'SELECT * FROM envelopes WHERE id = $1';
     const envelopeResult = await pool.query(envelopeQuery, [id]);
     if (envelopeResult.rows.length === 0) {
+      console.error('Signing session not found for ID:', id);
       return res.status(404).json({ error: 'Signing session not found' });
     }
     const envelope = envelopeResult.rows[0];
+    console.log('Envelope found:', { id: envelope.id, status: envelope.status, recipient_id: envelope.recipient_id });
     
     // Get associated recipient and documents
     const recipientQuery = 'SELECT * FROM recipients WHERE id = $1';
@@ -364,6 +483,12 @@ app.get('/api/signing-session/:id', authenticateApiKey, async (req, res) => {
     const documentsResult = await pool.query(documentsQuery, [envelope.recipient_id]);
     const signaturesQuery = 'SELECT * FROM signatures WHERE envelope_id = $1';
     const signaturesResult = await pool.query(signaturesQuery, [id]);
+    
+    console.log('Associated data found:', {
+      recipient: !!recipientResult.rows[0],
+      documentsCount: documentsResult.rows.length,
+      signaturesCount: signaturesResult.rows.length
+    });
     
     res.status(200).json({
       session: {
@@ -374,8 +499,8 @@ app.get('/api/signing-session/:id', authenticateApiKey, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching signing session:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error fetching signing session:', error.stack || error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 
@@ -455,7 +580,7 @@ app.get('/api/envelope/:id/signing-link', authenticateApiKey, async (req, res) =
 // Endpoint to update envelope status after signing or other actions
 app.post('/api/envelope/:id/status', authenticateApiKey, async (req, res) => {
   const { id } = req.params;
-  const { status, signatureType, signatureData, consentGiven } = req.body;
+  const { status, signatureType, signatureData, consentGiven, reason, signedPdfUrl } = req.body;
   try {
     const envelopeQuery = 'SELECT * FROM envelopes WHERE id = $1';
     const envelopeResult = await pool.query(envelopeQuery, [id]);
@@ -463,9 +588,20 @@ app.post('/api/envelope/:id/status', authenticateApiKey, async (req, res) => {
       return res.status(404).json({ error: 'Envelope not found' });
     }
 
-    // Update envelope status
-    const updateQuery = 'UPDATE envelopes SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
-    await pool.query(updateQuery, [status, id]);
+    // Add signed_pdf_url column if not exists
+    try {
+      await pool.query('ALTER TABLE envelopes ADD COLUMN IF NOT EXISTS signed_pdf_url TEXT');
+    } catch (alterError) {
+      console.log('signed_pdf_url column may already exist');
+    }
+    
+    // Update envelope status and signed PDF URL
+    const updateQuery = signedPdfUrl 
+      ? 'UPDATE envelopes SET status = $1, signed_pdf_url = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3'
+      : 'UPDATE envelopes SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+    
+    const updateParams = signedPdfUrl ? [status, signedPdfUrl, id] : [status, id];
+    await pool.query(updateQuery, updateParams);
 
     // If signature data is provided, store it
     if (signatureType && signatureData) {
@@ -477,14 +613,14 @@ app.post('/api/envelope/:id/status', authenticateApiKey, async (req, res) => {
       if (consentGiven) {
         const consentQuery = 'INSERT INTO signature_consents (signature_id, consent_given, consent_timestamp) VALUES ($1, $2, CURRENT_TIMESTAMP)';
         await pool.query(consentQuery, [signatureId, consentGiven]);
-        console.log(`Consent recorded for signature ID ${signatureId}`);
+        console.log('Consent recorded for signature ID:', signatureId);
       }
 
       // Create a tamper-evident record by hashing the signature data for integrity (supports eIDAS, ESIGN, UETA)
       const signatureHash = crypto.createHash('sha256').update(signatureData).digest('hex');
       const tamperEvidentQuery = 'INSERT INTO signature_hashes (signature_id, hash) VALUES ($1, $2)';
       await pool.query(tamperEvidentQuery, [signatureId, signatureHash]);
-      console.log(`Tamper-evident hash recorded for signature ID ${signatureId}`);
+      console.log('Tamper-evident hash recorded for signature ID:', signatureId);
 
       // TODO: Ensure further e-signature compliance with eIDAS, ESIGN, and UETA
       //       - Implement digital certificates for signer authentication (eIDAS) - Requires integration with a Trust Service Provider
@@ -496,11 +632,19 @@ app.post('/api/envelope/:id/status', authenticateApiKey, async (req, res) => {
     const ipAddress = req.ip || req.connection.remoteAddress;
     await logAuditEvent('ENVELOPE_STATUS_UPDATED', envelopeResult.rows[0].recipient_id, ipAddress, { envelopeId: id, status });
 
-    // Dispatch event internally
-    const eventType = status === 'completed' ? 'signing_complete' : (status === 'declined' ? 'signing_incomplete' : 'status_update');
+    // Dispatch event internally with enhanced event types
+    let eventType = 'status_update';
+    if (status === 'completed') eventType = 'signing_complete';
+    else if (status === 'signing_declined') eventType = 'signing_declined';
+    else if (status === 'signing_deferred') eventType = 'signing_deferred';
+    else if (status === 'voided') eventType = 'envelope_voided';
+    else if (status === 'verification_failed') eventType = 'id_verification_failed';
+    else if (status === 'verified') eventType = 'id_verification_success';
+    
     dispatchEvent(eventType, {
       envelopeId: id,
       status,
+      reason: reason || null,
       timestamp: new Date().toISOString()
     });
 
@@ -515,7 +659,7 @@ app.post('/api/envelope/:id/status', authenticateApiKey, async (req, res) => {
       await logAuditEvent('SIGNED_DOCUMENTS_ACCESSIBLE', envelopeResult.rows[0].recipient_id, ipAddress, { envelopeId: id, documentCount: documents.length });
 
       // TODO: Implement notification or email to recipient with access to signed documents
-      console.log(`Signed documents are now accessible for envelope ${id}`);
+      console.log('Signed documents are now accessible for envelope:', id);
     }
 
     res.status(200).json({ message: 'Envelope status updated', status });
@@ -593,8 +737,7 @@ app.post('/api/verify/document-name', authenticateApiKey, upload.single('documen
     const recipientName = recipientResult.rows[0].name;
 
     // Use Gemini API for document verification
-    const axios = require('axios');
-    console.log(`Processing document image with Gemini API: ${file.originalname}`);
+    console.log('Processing document image with Gemini API:', { filename: sanitizeForLog(file.originalname) });
     
     // Load Gemini API key from environment variables
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -640,13 +783,16 @@ app.post('/api/verify/document-name', authenticateApiKey, upload.single('documen
     if (geminiResponse.data && geminiResponse.data.candidates && geminiResponse.data.candidates.length > 0) {
       const content = geminiResponse.data.candidates[0].content;
       if (content && content.parts && content.parts.length > 0) {
-        // Try to parse JSON from the response
+        // Try to parse JSON from the response with validation
         try {
-          result = JSON.parse(content.parts[0].text);
+          const jsonText = content.parts[0].text;
+          if (typeof jsonText === 'string' && jsonText.trim().startsWith('{')) {
+            result = JSON.parse(jsonText);
+          }
         } catch (e) {
           // Fallback: try to extract JSON from text
           const match = content.parts[0].text.match(/\{[\s\S]*\}/);
-          if (match) {
+          if (match && match[0].length < 10000) { // Limit size
             result = JSON.parse(match[0]);
           }
         }
@@ -687,30 +833,37 @@ app.post('/api/verify/face', authenticateApiKey, upload.fields([{ name: 'selfieI
   }
 
   try {
+    console.log('Starting face verification process...');
     // Upload images to blob storage
     const { put } = require('@vercel/blob');
     const selfieFile = files['selfieImage'][0];
     const documentFile = files['documentImage'][0];
-    const selfieBlob = await put(`${envelopeId}-selfie-${Date.now()}.jpg`, selfieFile.buffer, { access: 'public', token: process.env.BLOB_READ_WRITE_TOKEN });
-    const documentBlob = await put(`${envelopeId}-docimg-${Date.now()}.jpg`, documentFile.buffer, { access: 'public', token: process.env.BLOB_READ_WRITE_TOKEN });
+    const cleanToken = process.env.BLOB_READ_WRITE_TOKEN.replace(/["']/g, '');
+    const selfieBlob = await put(`${envelopeId}-selfie-${Date.now()}.jpg`, selfieFile.buffer, { access: 'public', token: cleanToken });
+    const documentBlob = await put(`${envelopeId}-docimg-${Date.now()}.jpg`, documentFile.buffer, { access: 'public', token: cleanToken });
     const selfieUrl = selfieBlob.url;
     const documentUrl = documentBlob.url;
+    console.log('Images uploaded to blob storage successfully');
 
     // Use Gemini API for face comparison
-    const axios = require('axios');
     const selfieBase64 = selfieFile.buffer.toString('base64');
     const documentBase64 = documentFile.buffer.toString('base64');
+    console.log('Images converted to base64, sizes:', { selfie: selfieBase64.length, document: documentBase64.length });
 
     // Load Gemini API key from environment variables
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
     if (!GEMINI_API_KEY) {
+      console.error('Gemini API key is not configured');
       throw new Error('Gemini API key is not configured');
     }
+    console.log('Gemini API key found, length:', GEMINI_API_KEY.length);
 
     // Craft prompt for Gemini API (request JSON output)
     const prompt = `Compare the two provided images. Are both images of the same person?\nReturn a JSON object with the following fields:\n- faceMatch: \"Yes\" if both images are of the same person, otherwise \"No\"\n- confidence: High/Medium/Low\n- reason: Explanation for the match result or any issues encountered.`;
+    console.log('Gemini prompt prepared');
 
     // Make request to Gemini API (REST call, expecting JSON response)
+    console.log('Making Gemini API request...');
     const geminiResponse = await axios.post(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
       {
@@ -743,21 +896,46 @@ app.post('/api/verify/face', authenticateApiKey, upload.fields([{ name: 'selfieI
       }
     );
 
+    console.log('Gemini API response status:', geminiResponse.status);
+    console.log('Gemini API response data structure:', {
+      hasData: !!geminiResponse.data,
+      hasCandidates: !!(geminiResponse.data && geminiResponse.data.candidates),
+      candidatesLength: geminiResponse.data?.candidates?.length || 0
+    });
+
     // Parse Gemini API JSON response robustly
     let result = null;
     if (geminiResponse.data && geminiResponse.data.candidates && geminiResponse.data.candidates.length > 0) {
       const content = geminiResponse.data.candidates[0].content;
+      console.log('Gemini content structure:', {
+        hasContent: !!content,
+        hasParts: !!(content && content.parts),
+        partsLength: content?.parts?.length || 0
+      });
+      
       if (content && content.parts && content.parts.length > 0) {
+        const jsonText = content.parts[0].text;
+        console.log('Raw Gemini response text:', jsonText);
+        
         try {
-          result = JSON.parse(content.parts[0].text);
+          if (typeof jsonText === 'string' && jsonText.trim().startsWith('{')) {
+            result = JSON.parse(jsonText);
+            console.log('Successfully parsed JSON result:', result);
+          }
         } catch (e) {
+          console.log('Failed to parse as direct JSON, trying regex extraction...');
           // Fallback: try to extract JSON from text
-          const match = content.parts[0].text.match(/\{[\s\S]*\}/);
-          if (match) {
+          const match = jsonText.match(/\{[\s\S]*\}/);
+          if (match && match[0].length < 10000) { // Limit size
             result = JSON.parse(match[0]);
+            console.log('Successfully parsed JSON from regex:', result);
+          } else {
+            console.error('No valid JSON found in response text');
           }
         }
       }
+    } else {
+      console.error('Invalid Gemini response structure:', JSON.stringify(geminiResponse.data, null, 2));
     }
 
     if (!result) {
@@ -786,8 +964,10 @@ app.post('/api/verify/face', authenticateApiKey, upload.fields([{ name: 'selfieI
     console.error('Error verifying face match with Gemini API:', error.stack || error);
     // If Gemini API returned an error response, forward the details
     if (error.response && error.response.data) {
+      console.error('Gemini API error response:', JSON.stringify(error.response.data, null, 2));
       return res.status(500).json({ error: 'Internal server error', details: error.response.data });
     }
+    console.error('General error details:', error.message);
     res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
@@ -832,7 +1012,7 @@ const triggerWebhooks = async (eventType, data) => {
     };
 
     for (const webhook of webhookResult.rows) {
-      console.log(`Triggering webhook for ${eventType} to ${webhook.url}`);
+      console.log('Triggering webhook:', { eventType, url: webhook.url });
       try {
         await axios.post(webhook.url, payload, {
           headers: {
@@ -840,9 +1020,9 @@ const triggerWebhooks = async (eventType, data) => {
           },
           timeout: 5000 // 5 seconds timeout
         });
-        console.log(`Webhook successfully sent to ${webhook.url}`);
+        console.log('Webhook successfully sent to:', webhook.url);
       } catch (error) {
-        console.error(`Failed to send webhook to ${webhook.url}:`, error.message);
+        console.error('Failed to send webhook:', { url: webhook.url, error: error.message });
       }
     }
   } catch (error) {
@@ -883,7 +1063,7 @@ app.post('/api/admin/api-keys', authenticateApiKey, async (req, res) => {
     }
     // Generate a new API key
     const newKey = `api_${crypto.randomBytes(16).toString('hex')}`;
-    const keyHash = require('bcrypt').hashSync(newKey, 10);
+    const keyHash = bcrypt.hashSync(newKey, 10);
     const partialKey = `${newKey.substring(0, 4)}****`;
     const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000) : null;
     // Store the key in the database
@@ -924,7 +1104,7 @@ app.delete('/api/admin/api-keys/:keyId', authenticateApiKey, async (req, res) =>
     // Log audit event for API key revocation
     const ipAddress = req.ip || req.connection.remoteAddress;
     await logAuditEvent('API_KEY_REVOKED', req.apiKeyId, ipAddress, { keyId, name: revokeResult.rows[0].name });
-    res.status(200).json({ message: `API key ${keyId} revoked successfully` });
+    res.status(200).json({ message: 'API key revoked successfully', keyId });
   } catch (error) {
     console.error('Error revoking API key:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -932,15 +1112,29 @@ app.delete('/api/admin/api-keys/:keyId', authenticateApiKey, async (req, res) =>
 });
 
 app.delete('/api/admin/session/:id', authenticateApiKey, async (req, res) => {
-  const { id } = req.params;
+  const id = req.params.id;
+  // Validate and sanitize the ID parameter
+  if (!id || typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+    return res.status(400).json({ error: 'Invalid session ID format' });
+  }
   try {
-    // Delete the envelope and cascade to documents, signatures, etc. (assuming foreign keys are set with ON DELETE CASCADE)
-    const deleteQuery = 'DELETE FROM envelopes WHERE id = $1 RETURNING id';
-    const result = await pool.query(deleteQuery, [id]);
-    if (result.rows.length === 0) {
+    // Get envelope info before deletion
+    const envelopeQuery = 'SELECT recipient_id FROM envelopes WHERE id = $1';
+    const envelopeResult = await pool.query(envelopeQuery, [id]);
+    if (envelopeResult.rows.length === 0) {
       return res.status(404).json({ error: 'Session not found' });
     }
-    res.status(200).json({ message: 'Session deleted successfully', id });
+    const recipientId = envelopeResult.rows[0].recipient_id;
+    
+    // Delete all related data
+    await pool.query('DELETE FROM signing_tokens WHERE envelope_id = $1', [id]);
+    await pool.query('DELETE FROM face_verification_attempts WHERE envelope_id = $1', [id]);
+    await pool.query('DELETE FROM signatures WHERE envelope_id = $1', [id]);
+    await pool.query('DELETE FROM documents WHERE recipient_id = $1', [recipientId]);
+    await pool.query('DELETE FROM recipients WHERE id = $1', [recipientId]);
+    await pool.query('DELETE FROM envelopes WHERE id = $1', [id]);
+    
+    res.status(200).json({ message: 'Session and all related data deleted successfully', id });
   } catch (error) {
     console.error('Error deleting session:', error);
     res.status(500).json({ error: 'Failed to delete session' });
@@ -948,41 +1142,281 @@ app.delete('/api/admin/session/:id', authenticateApiKey, async (req, res) => {
 });
 
 app.get('/api/document/:id/download', authenticateApiKey, async (req, res) => {
-  const { id } = req.params;
+  const id = req.params.id;
+  // Validate and sanitize the ID parameter
+  if (!id || typeof id !== 'string' || !/^\d+$/.test(id)) {
+    console.error('Invalid document ID format:', id);
+    return res.status(400).json({ error: 'Invalid document ID format' });
+  }
   try {
     // Fetch document metadata
     const docQuery = 'SELECT * FROM documents WHERE id = $1';
     const docResult = await pool.query(docQuery, [id]);
     if (docResult.rows.length === 0) {
+      console.error('Document not found for ID:', id);
       return res.status(404).json({ error: 'Document not found' });
     }
     const doc = docResult.rows[0];
+    console.log('Document found:', { id: doc.id, filename: doc.filename, hasUrl: !!doc.url });
+    
     if (!doc.url) {
+      console.error('Missing document URL for document ID:', id);
       return res.status(400).json({ error: 'Missing document URL' });
     }
+    
+    // Check if URL is valid before downloading
+    if (doc.url.includes('vercel-blob-simulated') || !doc.url.startsWith('http')) {
+      console.error('Invalid blob URL detected:', doc.url);
+      return res.status(500).json({ error: 'Invalid document URL' });
+    }
+    
     // Download the encrypted blob
+    console.log('Downloading blob from URL:', doc.url);
     const blobResponse = await axios.get(doc.url, { responseType: 'arraybuffer' });
     const blobBuffer = Buffer.from(blobResponse.data);
-    // Extract IV, auth tag, and encrypted content from blob
-    const iv = blobBuffer.slice(0, 16);
-    const authTag = blobBuffer.slice(16, 32);
-    const encryptedContent = blobBuffer.slice(32);
-    // Decrypt
-    const encryptionKey = process.env.ENCRYPTION_KEY;
-    if (!encryptionKey) {
-      return res.status(500).json({ error: 'Encryption key not configured' });
+    console.log('Downloaded blob size:', blobBuffer.length);
+    
+    // Check if document has encryption metadata
+    if (!doc.encryption_iv || !doc.encryption_auth_tag) {
+      console.log('Document not encrypted, returning as-is');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${doc.filename}"`);
+      res.send(blobBuffer);
+      return;
     }
-    const decipher = require('crypto').createDecipheriv('aes-256-gcm', Buffer.from(encryptionKey, 'hex'), iv);
-    decipher.setAuthTag(authTag);
-    let decrypted = decipher.update(encryptedContent);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-    // Stream the PDF
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${doc.filename}"`);
-    res.send(decrypted);
+    
+    try {
+      // Extract IV, auth tag, and encrypted content from blob
+      const iv = Buffer.from(doc.encryption_iv, 'hex');
+      const authTag = Buffer.from(doc.encryption_auth_tag, 'hex');
+      const encryptedContent = blobBuffer;
+      
+      console.log('Decrypting document with IV length:', iv.length, 'AuthTag length:', authTag.length);
+      
+      // Decrypt
+      const encryptionKey = process.env.ENCRYPTION_KEY;
+      if (!encryptionKey) {
+        console.error('Encryption key not configured');
+        return res.status(500).json({ error: 'Encryption key not configured' });
+      }
+      
+      const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(encryptionKey, 'hex'), iv);
+      decipher.setAuthTag(authTag);
+      let decrypted = decipher.update(encryptedContent);
+      decrypted = Buffer.concat([decrypted, decipher.final()]);
+      
+      console.log('Document decrypted successfully, size:', decrypted.length);
+      
+      // Stream the PDF
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${doc.filename}"`);
+      res.send(decrypted);
+    } catch (decryptError) {
+      console.error('Decryption failed, trying to return document as-is:', decryptError.message);
+      // Fallback: try to return the document without decryption
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${doc.filename}"`);
+      res.send(blobBuffer);
+    }
+
   } catch (error) {
-    console.error('Error decrypting or streaming document:', error);
-    res.status(500).json({ error: 'Failed to decrypt or stream document' });
+    console.error('Error decrypting or streaming document:', error.stack || error);
+    res.status(500).json({ error: 'Failed to decrypt or stream document', details: error.message });
+  }
+});
+
+// Add upload endpoint for standalone file uploads
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    console.log('Uploading file:', file.originalname, 'Size:', file.buffer.length);
+
+    // Check if blob token is configured
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+      console.error('Blob token not configured');
+      return res.status(500).json({ error: 'Storage not configured' });
+    }
+
+    // Upload to Vercel Blob without encryption for standalone uploads
+    const cleanToken = process.env.BLOB_READ_WRITE_TOKEN.replace(/["']/g, '');
+    const blob = await put(
+      `${Date.now()}-${file.originalname}`,
+      file.buffer,
+      {
+        access: 'public',
+        token: cleanToken,
+      }
+    );
+
+    console.log('File uploaded successfully:', blob.url);
+    
+    // Validate the returned URL
+    if (!blob.url || blob.url.includes('simulated')) {
+      console.error('Invalid blob URL returned:', blob.url);
+      return res.status(500).json({ error: 'Storage upload failed' });
+    }
+    
+    res.status(200).json({ url: blob.url });
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    res.status(500).json({ error: 'Failed to upload file', details: error.message });
+  }
+});
+
+// Endpoint to sign PDF with signatures and append ID proof
+app.post('/api/sign-pdf', authenticateApiKey, upload.single('pdf'), async (req, res) => {
+  try {
+    console.log('Sign PDF request received');
+    const pdfFile = req.file;
+    const signatures = JSON.parse(req.body.signatures || '[]');
+    const envelopeId = req.body.envelopeId;
+
+    console.log('PDF file:', !!pdfFile, 'Signatures count:', signatures.length, 'Envelope ID:', envelopeId);
+
+    if (!pdfFile) {
+      console.error('No PDF file uploaded');
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    if (!signatures || signatures.length === 0) {
+      console.error('No signatures provided');
+      return res.status(400).json({ error: 'No signatures provided' });
+    }
+
+    // Load PDF-lib for PDF manipulation
+    const { PDFDocument } = require('pdf-lib');
+    
+    console.log('Loading PDF document, buffer size:', pdfFile.buffer.length);
+    // Load the PDF document with encryption handling
+    let pdfDoc;
+    try {
+      pdfDoc = await PDFDocument.load(pdfFile.buffer, { ignoreEncryption: true });
+      console.log('PDF document loaded successfully');
+    } catch (loadError) {
+      console.error('Failed to load PDF with ignoreEncryption=true:', loadError.message);
+      // Try loading without any options as fallback
+      try {
+        pdfDoc = await PDFDocument.load(pdfFile.buffer);
+        console.log('PDF document loaded successfully without ignoreEncryption');
+      } catch (fallbackError) {
+        console.error('Failed to load PDF completely:', fallbackError.message);
+        throw new Error('Unable to load PDF document. The file may be corrupted or use an unsupported encryption method.');
+      }
+    }
+    
+    // Process each signature
+    for (const sig of signatures) {
+      try {
+        console.log('Processing signature:', { page: sig.page, x: sig.x, y: sig.y, name: sig.name });
+        
+        // Embed the signature image (PNG format)
+        const pngImage = await pdfDoc.embedPng(sig.imageDataUrl);
+        
+        // Get the page (convert from 1-based to 0-based index)
+        const page = pdfDoc.getPage(sig.page - 1);
+        
+        // Calculate Y position (PDF coordinates start from bottom-left)
+        const y = page.getHeight() - sig.y - sig.height;
+        
+        // Draw the signature image
+        page.drawImage(pngImage, {
+          x: sig.x,
+          y: y,
+          width: sig.width,
+          height: sig.height,
+        });
+        
+        // Add signature metadata text below the signature with better positioning
+        const metadataText = `Signed by: ${sig.name}\nIP: ${sig.ipAddress}\nDate: ${new Date(sig.timestamp).toLocaleString()}`;
+        
+        // Ensure metadata doesn't go below page bounds
+        const metadataY = Math.max(y - 50, 20);
+        
+        page.drawText(metadataText, {
+          x: sig.x,
+          y: metadataY,
+          size: 9,
+          lineHeight: 12,
+          maxWidth: sig.width || 200,
+        });
+        
+        console.log('Signature processed successfully');
+      } catch (sigError) {
+        console.error('Error processing signature:', sigError);
+        // Continue with other signatures even if one fails
+      }
+    }
+    
+    // Append ID proof documents if envelope ID is provided
+    if (envelopeId) {
+      try {
+        // Get envelope and find face verification attempts (which contain document images)
+        const envelopeQuery = 'SELECT * FROM envelopes WHERE id = $1';
+        const envelopeResult = await pool.query(envelopeQuery, [envelopeId]);
+        
+        if (envelopeResult.rows.length > 0) {
+          const faceVerificationQuery = 'SELECT * FROM face_verification_attempts WHERE envelope_id = $1 ORDER BY attempted_at DESC LIMIT 1';
+          const faceResult = await pool.query(faceVerificationQuery, [envelopeId]);
+          
+          if (faceResult.rows.length > 0) {
+            const faceAttempt = faceResult.rows[0];
+            
+            // Download and add document image
+            if (faceAttempt.document_url) {
+              try {
+                const docResponse = await axios.get(faceAttempt.document_url, { responseType: 'arraybuffer' });
+                const docImageBytes = Buffer.from(docResponse.data);
+                const docImage = await pdfDoc.embedJpg(docImageBytes);
+                
+                // Add new page for ID proof
+                const idProofPage = pdfDoc.addPage();
+                const { width, height } = idProofPage.getSize();
+                
+                // Scale image to fit page
+                const imgDims = docImage.scale(Math.min(width / docImage.width, height / docImage.height) * 0.8);
+                
+                idProofPage.drawText('Identity Verification Document', {
+                  x: 50,
+                  y: height - 50,
+                  size: 16,
+                });
+                
+                idProofPage.drawImage(docImage, {
+                  x: (width - imgDims.width) / 2,
+                  y: (height - imgDims.height) / 2 - 30,
+                  width: imgDims.width,
+                  height: imgDims.height,
+                });
+                
+                console.log('ID proof document added to PDF');
+              } catch (imgError) {
+                console.error('Error adding ID proof image:', imgError);
+              }
+            }
+          }
+        }
+      } catch (envelopeError) {
+        console.error('Error fetching envelope data:', envelopeError);
+      }
+    }
+    
+    console.log('Saving signed PDF');
+    // Save the signed PDF
+    const signedPdfBytes = await pdfDoc.save();
+    console.log('Signed PDF saved, size:', signedPdfBytes.length);
+    
+    // Return the signed PDF as a buffer
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="signed-document.pdf"');
+    res.send(Buffer.from(signedPdfBytes));
+    
+  } catch (error) {
+    console.error('Error signing PDF:', error.stack || error);
+    res.status(500).json({ error: 'Failed to sign PDF', details: error.message });
   }
 });
 

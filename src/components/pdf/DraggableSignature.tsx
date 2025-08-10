@@ -25,9 +25,10 @@ interface DraggableSignatureProps {
   sidebar?: boolean;
   signatureData?: SignatureData | null;
   disabled?: boolean;
+  uploadMode?: boolean;
 }
 
-export const DraggableSignature = ({ id, label, position, onSign, sidebar, signatureData: propSignatureData, disabled }: DraggableSignatureProps) => {
+export const DraggableSignature = ({ id, label, position, onSign, sidebar, signatureData: propSignatureData, disabled, uploadMode }: DraggableSignatureProps) => {
   const [signatureData, setSignatureData] = useState<SignatureData | null>(propSignatureData || null);
   const [name, setName] = useState('');
   const [ipAddress, setIpAddress] = useState('');
@@ -46,7 +47,7 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
     id: id,
     data: { signatureData: signatureData },
-    disabled: !sidebar || !signatureData, // Only draggable if in sidebar and signatureData exists
+    disabled: !sidebar || !signatureData || disabled, // Only draggable if in sidebar and signatureData exists and not disabled
   });
 
   const style = sidebar
@@ -70,10 +71,11 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
     <div
       ref={setNodeRef}
       style={style}
-      className={`z-20 max-w-xs w-64 sm:w-72 md:w-80 bg-yellow-50 border-2 border-yellow-300 rounded-xl shadow-xl p-4 flex flex-col items-center animate-fade-in ${sidebar ? '' : 'absolute'}`}
+      {...(sidebar && signatureData && !disabled ? { ...listeners, ...attributes } : {})}
+      className={`z-20 max-w-xs w-64 sm:w-72 md:w-80 bg-yellow-50 border-2 border-yellow-300 rounded-xl shadow-xl p-4 flex flex-col items-center animate-fade-in ${sidebar ? (signatureData && !disabled ? 'cursor-move' : '') : 'absolute'}`}
     >
       <div className="flex items-center w-full mb-2">
-        {sidebar && signatureData && (
+        {sidebar && signatureData && !disabled && (
           <div {...listeners} {...attributes} className="cursor-move mr-2 flex-shrink-0">
             <GripVertical className="h-6 w-6 text-yellow-700" />
           </div>
@@ -107,7 +109,13 @@ export const DraggableSignature = ({ id, label, position, onSign, sidebar, signa
                     className="mb-2 text-base"
                     disabled={disabled}
                   />
-                  <ESignature onSignatureComplete={handleSignatureComplete} onBack={() => {}} onSignLater={() => {}} onDecline={() => {}} />
+                  <ESignature 
+                    onSignatureComplete={handleSignatureComplete} 
+                    onBack={() => {}} 
+                    onSignLater={() => {}} 
+                    onDecline={() => {}} 
+                    uploadMode={uploadMode}
+                  />
                 </div>
               </DialogContent>
             </Dialog>

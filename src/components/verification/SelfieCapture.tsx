@@ -40,6 +40,7 @@ export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieC
       }
     } catch (error) {
       console.error("Error accessing camera:", error);
+      alert('Camera access failed. Please check permissions and try again.');
     } finally {
       setIsCameraInitializing(false);
     }
@@ -121,7 +122,14 @@ export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieC
   const progressPercentage = (recordingTime / RECORDING_DURATION) * 100;
 
   const performFaceMatching = async (videoBlob: Blob) => {
+    // Show processing state immediately
     setIsFaceMatching(true);
+    setFaceMatchResult(null);
+    sessionStorage.setItem('faceVerificationProcessing', 'true');
+    
+    // Add small delay to show processing state
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     try {
       // Extract a frame from the video for face detection
       const videoUrl = URL.createObjectURL(videoBlob);
@@ -171,15 +179,28 @@ export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieC
         }
 
         const result = await response.json();
+        
+        // Add delay before showing result
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
         setFaceMatchResult(result.faceVerified);
         sessionStorage.setItem('faceMatchResult', result.faceVerified.toString());
+        // Store the detailed reason from Gemini API
+        if (result.reason) {
+          sessionStorage.setItem('faceMatchReason', result.reason);
+        }
       }
     } catch (error) {
       console.error('Error during face match:', error);
+      
+      // Add delay before showing error result
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
       setFaceMatchResult(false);
       sessionStorage.setItem('faceMatchResult', 'false');
     } finally {
       setIsFaceMatching(false);
+      sessionStorage.setItem('faceVerificationProcessing', 'false');
     }
   };
 
@@ -204,9 +225,18 @@ export const SelfieCapture = ({ onCaptureComplete, onBack, envelopeId }: SelfieC
         </p>
         {isFaceMatching && <p className="text-primary">Processing face match...</p>}
         {faceMatchResult !== null && !isFaceMatching && (
-          <p className="text-sm mt-2">
-            {faceMatchResult ? <span className="text-green-500">Face match successful!</span> : <span className="text-red-500">Face match failed. Please retry.</span>}
-          </p>
+          <div className="text-sm mt-2 max-w-md mx-auto">
+            {faceMatchResult ? (
+              <span className="text-green-500">Face match successful!</span>
+            ) : (
+              <div className="text-red-500">
+                <p className="font-medium mb-1">Face verification failed:</p>
+                <p className="text-xs bg-red-50 p-2 rounded border">
+                  {sessionStorage.getItem('faceMatchReason') || 'Please retry with better lighting and ensure your face is clearly visible.'}
+                </p>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

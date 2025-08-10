@@ -3,7 +3,6 @@ import { CheckCircle, Download, RefreshCw, Home, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { generateVerificationPdf } from "@/lib/pdfGenerator";
 
 interface VerificationCompleteProps {
   onRestart: () => void;
@@ -24,15 +23,9 @@ export const VerificationComplete = ({ onRestart, onHome, verificationData }: Ve
     return () => clearTimeout(timer);
   });
 
-  const handleDownload = async () => {
-    setIsGenerating(true);
-    try {
-      await generateVerificationPdf(verificationData);
-    } catch (error) {
-      console.error("Error generating PDF:", error);
-    } finally {
-      setIsGenerating(false);
-    }
+  const handleDownload = () => {
+    // Redirect to signing page where the actual signed PDF will be generated
+    window.location.href = '/sign-pdf';
   };
 
   if (isProcessing) {
@@ -112,21 +105,14 @@ export const VerificationComplete = ({ onRestart, onHome, verificationData }: Ve
       {/* Download Section */}
       <Card className="p-6 mb-8 bg-gradient-to-r from-verification-bg to-background">
         <div className="text-center">
-          <h3 className="text-lg font-semibold mb-2">Download Your Signed Document</h3>
+          <h3 className="text-lg font-semibold mb-2">Proceed to Document Signing</h3>
           <p className="text-muted-foreground mb-4">
-            Get a copy of your verified and digitally signed identification document
+            Continue to sign your document and generate the final signed PDF
           </p>
           
-          {downloadProgress > 0 && downloadProgress < 100 && (
-            <div className="mb-4">
-              <Progress value={downloadProgress} className="w-full" />
-              <p className="text-sm text-muted-foreground mt-1">Preparing download...</p>
-            </div>
-          )}
-          
-          <Button onClick={handleDownload} size="lg" className="w-full sm:w-auto" disabled={isGenerating}>
-            <Download className="w-4 h-4 mr-2" />
-            {isGenerating ? "Generating PDF..." : "Download Signed Document (PDF)"}
+          <Button onClick={handleDownload} size="lg" className="w-full sm:w-auto">
+            <FileText className="w-4 h-4 mr-2" />
+            Continue to Sign Document
           </Button>
         </div>
       </Card>

@@ -107,25 +107,57 @@ const AdminPortal = () => {
   const handleDownloadDocument = async (sessionId, docId = null) => {
     try {
       setDownloading(sessionId);
-      // Find the document by docId
-      const doc = documents.find(d => d.id === docId);
-      if (!doc) {
-        throw new Error('Document not found');
-      }
-      // Call backend endpoint to get decrypted PDF
-      const url = `${API_URL}/api/document/${doc.id}/download`;
-      const response = await fetch(url, {
-        headers: {
-          'x-api-key': import.meta.env.VITE_ADMIN_API_KEY || 'your-admin-api-key'
+      
+      // If docId is provided, download the specific document (original document)
+      if (docId) {
+        const doc = documents.find(d => d.id === docId);
+        if (!doc) {
+          throw new Error('Document not found');
         }
-      });
-      if (!response.ok) {
-        throw new Error('Failed to download document');
+        // Call backend endpoint to get decrypted PDF
+        const url = `${API_URL}/api/document/${doc.id}/download`;
+        const response = await fetch(url, {
+          headers: {
+            'x-api-key': import.meta.env.VITE_ADMIN_API_KEY || 'your-admin-api-key'
+          }
+        });
+        if (!response.ok) {
+          throw new Error('Failed to download document');
+        }
+        const blob = await response.blob();
+        const downloadUrl = window.URL.createObjectURL(blob);
+        window.open(downloadUrl, '_blank');
+        setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 1000);
+      } else {
+        // No docId provided - download signed PDF for completed sessions
+        const session = sessions.find(s => s.id === sessionId);
+        if (!session) {
+          throw new Error('Session not found');
+        }
+        
+        if (session.status === 'completed') {
+          // Get session details to find signed PDF URL
+          const response = await fetch(`${API_URL}/api/signing-session/${sessionId}`, {
+            headers: {
+              'x-api-key': import.meta.env.VITE_ADMIN_API_KEY || 'your-admin-api-key'
+            }
+          });
+          if (!response.ok) {
+            throw new Error('Failed to fetch session details');
+          }
+          const data = await response.json();
+          const signedPdfUrl = data.session.signed_pdf_url;
+          
+          if (!signedPdfUrl) {
+            throw new Error('Signed PDF not found for this session');
+          }
+          
+          // Download the signed PDF directly
+          window.open(signedPdfUrl, '_blank');
+        } else {
+          throw new Error('Session is not completed yet');
+        }
       }
-      const blob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      window.open(downloadUrl, '_blank');
-      setTimeout(() => window.URL.revokeObjectURL(downloadUrl), 1000);
     } catch (err) {
       console.error('Error downloading document:', err);
       alert('Failed to download document');
