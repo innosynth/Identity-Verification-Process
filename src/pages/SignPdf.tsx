@@ -36,9 +36,15 @@ const PlacedSignature = ({ signature, index, pageDimensions, pdfPageRef, onRemov
     opacity: isDragging ? 0.5 : 1,
   };
 
-  // Calculate render position based on page dimensions
-  const renderX = (signature.position.x / pageDimensions.width) * (pdfPageRef.current?.clientWidth || 1);
-  const renderY = (signature.position.y / pageDimensions.height) * (pdfPageRef.current?.clientHeight || 1);
+  // Calculate render position based on canvas dimensions
+  const canvas = pdfPageRef.current?.querySelector('canvas');
+  if (!canvas) return null;
+  const canvasRect = canvas.getBoundingClientRect();
+  const containerRect = pdfPageRef.current!.getBoundingClientRect();
+  const scaleX = canvasRect.width / pageDimensions.width;
+  const scaleY = canvasRect.height / pageDimensions.height;
+  const renderX = (canvasRect.left - containerRect.left) + (signature.position.x * canvasRect.width);
+  const renderY = (canvasRect.top - containerRect.top) + (signature.position.y * canvasRect.height);
 
   return (
     <div
@@ -328,16 +334,16 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
         const currentSig = signaturesOnPages[signatureIndex];
         if (currentSig) {
           // Convert current position to screen coordinates
-          const currentScreenX = (currentSig.position.x / pageDimensions.width) * pageRect.width;
-          const currentScreenY = (currentSig.position.y / pageDimensions.height) * pageRect.height;
+          const currentScreenX = currentSig.position.x * pageRect.width;
+          const currentScreenY = currentSig.position.y * pageRect.height;
           
           // Apply delta movement
           const newScreenX = currentScreenX + delta.x;
           const newScreenY = currentScreenY + delta.y;
           
-          // Convert back to PDF coordinates
-          let newX = (newScreenX / pageRect.width) * pageDimensions.width;
-          let newY = (newScreenY / pageRect.height) * pageDimensions.height;
+          // Convert back to normalized coordinates
+          let newX = newScreenX / pageRect.width;
+          let newY = newScreenY / pageRect.height;
           
           // If placeholders exist, snap to nearest placeholder
           let placeholderId = currentSig.placeholderId;
@@ -368,13 +374,9 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
           let x = clientX - pageRect.left;
           let y = clientY - pageRect.top;
           
-          // Scale coordinates to PDF dimensions
-          if (pageDimensions.width > 0 && pageDimensions.height > 0) {
-            x = (x / pageRect.width) * pageDimensions.width;
-            y = (y / pageRect.height) * pageDimensions.height;
-          } else {
-            return; // Skip if dimensions not ready
-          }
+          // Convert to normalized coordinates
+          x = x / pageRect.width;
+          y = y / pageRect.height;
           
           let placeholderId: number | undefined;
           
@@ -390,11 +392,11 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
               return;
             }
           } else {
-            // Only clamp to prevent going completely off-page when no placeholders
-            const signatureWidth = 128;
-            const signatureHeight = 80;
-            x = Math.max(0, Math.min(x, pageDimensions.width - signatureWidth));
-            y = Math.max(0, Math.min(y, pageDimensions.height - signatureHeight));
+            // Clamp to prevent going off-page when no placeholders (normalized)
+            const signatureWidth = 128 / pageRect.width;
+            const signatureHeight = 64 / pageRect.height;
+            x = Math.max(0, Math.min(x, 1 - signatureWidth));
+            y = Math.max(0, Math.min(y, 1 - signatureHeight));
           }
           
           setSignaturesOnPages(prev => [
@@ -476,8 +478,8 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
       x: sig.position.x,
       y: sig.position.y,
       imageDataUrl: sig.signature.signature,
-      width: sig.signature.width || 128,
-      height: sig.signature.height || 64,
+      width: (sig.signature.width || 128) / pageDimensions.width,
+      height: (sig.signature.height || 64) / pageDimensions.height,
       name: sig.signature.name,
       ipAddress: sig.signature.ipAddress,
       timestamp: sig.signature.timestamp,
@@ -596,12 +598,12 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
 
   // Helper functions for placeholder management
   const findNearestPlaceholder = (x: number, y: number, page: number) => {
-    if (signaturePlaceholders.length === 0 || pageDimensions.width === 0) return null;
+    if (signaturePlaceholders.length === 0) return null;
     
     const pageePlaceholders = signaturePlaceholders.filter(p => p.page_number === page);
     let nearest = null;
     let minDistance = Infinity;
-    const snapDistance = 50; // Reduced snap distance
+    const snapDistance = 0.05; // 5% of page dimensions
     
     for (const placeholder of pageePlaceholders) {
       const distance = Math.sqrt(
@@ -633,9 +635,9 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
     let x = event.clientX - pdfRect.left;
     let y = event.clientY - pdfRect.top;
     
-    // Scale to PDF dimensions
-    x = (x / pdfRect.width) * pageDimensions.width;
-    y = (y / pdfRect.height) * pageDimensions.height;
+    // Convert to normalized coordinates
+    x = x / pdfRect.width;
+    y = y / pdfRect.height;
     
     let placeholderId: number | undefined;
     
@@ -651,11 +653,11 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
         return;
       }
     } else {
-      // Only clamp to prevent going completely off-page when no placeholders
-      const signatureWidth = 128;
-      const signatureHeight = 80;
-      x = Math.max(0, Math.min(x, pageDimensions.width - signatureWidth));
-      y = Math.max(0, Math.min(y, pageDimensions.height - signatureHeight));
+      // Clamp to prevent going off-page when no placeholders (normalized)
+      const signatureWidth = 128 / pdfRect.width;
+      const signatureHeight = 64 / pdfRect.height;
+      x = Math.max(0, Math.min(x, 1 - signatureWidth));
+      y = Math.max(0, Math.min(y, 1 - signatureHeight));
     }
     
     setSignaturesOnPages(prev => [
@@ -857,8 +859,8 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                                   onClick={() => {
                                     const rect = pdfPageRef.current?.getBoundingClientRect();
                                     if (rect && pageDimensions.width > 0) {
-                                      const x = pageDimensions.width * 0.5 - 64; // Center horizontally
-                                      const y = pageDimensions.height * 0.85 - 32; // Near bottom
+                                      const x = 0.5 - (64 / rect.width); // Center horizontally
+                                      const y = 0.85 - (32 / rect.height); // Near bottom
                                       
                                       setSignaturesOnPages(prev => [
                                         ...prev,
@@ -875,10 +877,16 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                             {/* Render signature placeholders for this page */}
                             {signaturePlaceholders.filter(p => p.page_number === pageNumber).map((placeholder) => {
                               const isOccupied = signaturesOnPages.some(sig => sig.placeholderId === placeholder.id);
-                              const renderX = (placeholder.x_position / pageDimensions.width) * (pdfPageRef.current?.clientWidth || 1);
-                              const renderY = (placeholder.y_position / pageDimensions.height) * (pdfPageRef.current?.clientHeight || 1);
-                              const renderWidth = (placeholder.width / pageDimensions.width) * (pdfPageRef.current?.clientWidth || 1);
-                              const renderHeight = (placeholder.height / pageDimensions.height) * (pdfPageRef.current?.clientHeight || 1);
+                              const canvas = pdfPageRef.current?.querySelector('canvas');
+                              if (!canvas) return null;
+                              const canvasRect = canvas.getBoundingClientRect();
+                              const containerRect = pdfPageRef.current!.getBoundingClientRect();
+                              const scaleX = canvasRect.width / pageDimensions.width;
+                              const scaleY = canvasRect.height / pageDimensions.height;
+                              const renderX = (canvasRect.left - containerRect.left) + (placeholder.x_position * canvasRect.width);
+                              const renderY = (canvasRect.top - containerRect.top) + (placeholder.y_position * canvasRect.height);
+                              const renderWidth = placeholder.width * canvasRect.width;
+                              const renderHeight = placeholder.height * canvasRect.height;
                               
                               return (
                                 <div
@@ -953,7 +961,7 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                                 if (!signaturesOnPages.some(sig => sig.page === page)) {
                                   newSignatures.push({
                                     page,
-                                    position: { x: pageDimensions.width * 0.5 - 64, y: pageDimensions.height * 0.85 - 32 },
+                                    position: { x: 0.5 - (64 / (pdfPageRef.current?.clientWidth || 1)), y: 0.85 - (32 / (pdfPageRef.current?.clientHeight || 1)) },
                                     signature: userSignature
                                   });
                                 }

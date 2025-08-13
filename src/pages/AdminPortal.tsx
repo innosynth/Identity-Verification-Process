@@ -731,7 +731,7 @@ const AdminPortal = () => {
               <DialogTitle>Create New Signing Session</DialogTitle>
             </DialogHeader>
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              <form onSubmit={handleCreateSession} className="space-y-6">
+              <div className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Recipient Name</label>
@@ -783,7 +783,7 @@ const AdminPortal = () => {
                     </div>
                   </div>
                 )}
-              </form>
+              </div>
             </div>
             <div className="border-t px-6 py-4 flex gap-3 justify-end bg-gray-50">
               <Button 
@@ -796,6 +796,7 @@ const AdminPortal = () => {
                 Cancel
               </Button>
               <Button 
+                type="button"
                 onClick={handleCreateSession}
                 disabled={isCreatingSession}
                 className="hover:bg-blue-600 focus:ring-2 focus:ring-blue-500"

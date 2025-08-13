@@ -1360,41 +1360,91 @@ app.post('/api/sign-pdf', authenticateApiKey, upload.single('pdf'), async (req, 
       try {
         console.log('Processing signature:', { page: sig.page, x: sig.x, y: sig.y, name: sig.name });
         
-        // Embed the signature image (PNG format)
-        const pngImage = await pdfDoc.embedPng(sig.imageDataUrl);
-        
-        // Get the page (convert from 1-based to 0-based index)
+        // Get page dimensions for coordinate logging
         const page = pdfDoc.getPage(sig.page - 1);
+        const pageWidth = page.getWidth();
+        const pageHeight = page.getHeight();
         
-        // Calculate Y position (PDF coordinates start from bottom-left)
-        const y = page.getHeight() - sig.y - sig.height;
+        // Calculate final coordinates
+        const finalX = sig.x * pageWidth;
+        const finalY = pageHeight - (sig.y * pageHeight) - (sig.height || 64);
         
-        // Draw the signature image
-        page.drawImage(pngImage, {
-          x: sig.x,
-          y: y,
-          width: sig.width,
-          height: sig.height,
+        console.log('Signature placement coordinates:', {
+          normalizedX: sig.x,
+          normalizedY: sig.y,
+          pageWidth,
+          pageHeight,
+          finalX: Math.round(finalX),
+          finalY: Math.round(finalY),
+          signatureWidth: Math.round((sig.width || 0.2) * pageWidth),
+          signatureHeight: Math.round((sig.height || 0.076) * pageHeight)
         });
         
-        // Add signature metadata text below the signature with better positioning
-        const metadataText = `Signed by: ${sig.name}\nIP: ${sig.ipAddress}\nDate: ${new Date(sig.timestamp).toLocaleString()}`;
+        // Validate signature data
+        if (!sig.imageDataUrl || !sig.imageDataUrl.startsWith('data:image/')) {
+          console.error('Invalid signature image data');
+          continue;
+        }
         
-        // Ensure metadata doesn't go below page bounds
-        const metadataY = Math.max(y - 50, 20);
+        // Embed signature image with format detection and validation
+        let signatureImage;
+        try {
+          if (sig.imageDataUrl.includes('data:image/png') || sig.imageDataUrl.startsWith('data:image/png')) {
+            signatureImage = await pdfDoc.embedPng(sig.imageDataUrl);
+          } else {
+            // For all other formats or corrupted data, convert to PNG
+            signatureImage = await pdfDoc.embedPng(sig.imageDataUrl);
+          }
+        } catch (embedError) {
+          console.error('Failed to embed image, trying PNG fallback:', embedError.message);
+          // Force PNG embedding for corrupted/invalid images
+          signatureImage = await pdfDoc.embedPng(sig.imageDataUrl);
+        }
         
-        page.drawText(metadataText, {
-          x: sig.x,
+        // Get the page (convert from 1-based to 0-based index)
+        const signaturePage = pdfDoc.getPage(sig.page - 1);
+        
+        // Calculate Y position (PDF coordinates start from bottom-left)
+        const absoluteY = signaturePage.getHeight() - (sig.y * signaturePage.getHeight()) - 64;
+        
+        // Draw the signature image with proper dimensions
+        const signatureWidth = (sig.width || 0.2) * signaturePage.getWidth();
+        const signatureHeight = (sig.height || 0.076) * signaturePage.getHeight();
+        
+        signaturePage.drawImage(signatureImage, {
+          x: sig.x * signaturePage.getWidth(),
+          y: absoluteY,
+          width: signatureWidth,
+          height: signatureHeight,
+        });
+        
+        // Add metadata text
+        const baseX = sig.x * signaturePage.getWidth();
+        const metadataY = Math.max(absoluteY - 15, 20);
+        
+        signaturePage.drawText(`Signed by: ${sig.name || 'Unknown'}`, {
+          x: baseX,
           y: metadataY,
-          size: 9,
-          lineHeight: 12,
-          maxWidth: sig.width || 200,
+          size: 8,
+        });
+        
+        signaturePage.drawText(`IP Address: ${sig.ipAddress || 'Unknown'}`, {
+          x: baseX,
+          y: metadataY - 12,
+          size: 8,
+        });
+        
+        signaturePage.drawText(`Date: ${new Date(sig.timestamp || Date.now()).toLocaleString()}`, {
+          x: baseX,
+          y: metadataY - 24,
+          size: 8,
         });
         
         console.log('Signature processed successfully');
       } catch (sigError) {
-        console.error('Error processing signature:', sigError);
-        // Continue with other signatures even if one fails
+        console.error('Error processing signature:', sigError.message);
+        // Continue with other signatures instead of failing completely
+        continue;
       }
     }
     

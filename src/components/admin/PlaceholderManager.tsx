@@ -32,6 +32,8 @@ export const PlaceholderManager = ({ pdfFile, onPlaceholdersChange, initialPlace
   }, [placeholders, onPlaceholdersChange]);
 
   const handlePdfClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (!isAddMode) return;
     
     try {
@@ -49,10 +51,10 @@ export const PlaceholderManager = ({ pdfFile, onPlaceholdersChange, initialPlace
       
       const newPlaceholder: Placeholder = {
         page: currentPage,
-        x: Math.max(0, x - 64),
-        y: Math.max(0, y - 32),
-        width: 128,
-        height: 64
+        x: Math.max(0, (x - 64) / pageDimensions.width),
+        y: Math.max(0, (y - 32) / pageDimensions.height),
+        width: 128 / pageDimensions.width,
+        height: 64 / pageDimensions.height
       };
       
       setPlaceholders(prev => [...prev, newPlaceholder]);
@@ -82,7 +84,7 @@ export const PlaceholderManager = ({ pdfFile, onPlaceholdersChange, initialPlace
       
       setPlaceholders(prev => prev.map((p, i) => 
         i === placeholderIndex 
-          ? { ...p, x: Math.max(0, x - 64), y: Math.max(0, y - 32) }
+          ? { ...p, x: Math.max(0, (x - 64) / pageDimensions.width), y: Math.max(0, (y - 32) / pageDimensions.height) }
           : p
       ));
     };
@@ -110,9 +112,13 @@ export const PlaceholderManager = ({ pdfFile, onPlaceholdersChange, initialPlace
           Define signature locations. Users will only be able to sign at these locations.
         </div>
         <Button
+          type="button"
           variant={isAddMode ? "default" : "outline"}
           size="sm"
-          onClick={() => setIsAddMode(!isAddMode)}
+          onClick={(e) => {
+            e.preventDefault();
+            setIsAddMode(!isAddMode);
+          }}
           className={isAddMode ? "bg-blue-600 text-white" : ""}
         >
           {isAddMode ? "Cancel" : "Add Placeholder"}
@@ -160,20 +166,22 @@ export const PlaceholderManager = ({ pdfFile, onPlaceholdersChange, initialPlace
                       draggedPlaceholder === globalIndex ? 'cursor-grabbing' : 'cursor-grab'
                     }`}
                     style={{
-                      left: (rect.left - containerRect.left) + (placeholder.x * scaleX),
-                      top: (rect.top - containerRect.top) + (placeholder.y * scaleY),
-                      width: placeholder.width * scaleX,
-                      height: placeholder.height * scaleY,
+                      left: (rect.left - containerRect.left) + (placeholder.x * pageDimensions.width * scaleX),
+                      top: (rect.top - containerRect.top) + (placeholder.y * pageDimensions.height * scaleY),
+                      width: placeholder.width * pageDimensions.width * scaleX,
+                      height: placeholder.height * pageDimensions.height * scaleY,
                       zIndex: draggedPlaceholder === globalIndex ? 10 : 5
                     }}
                     onMouseDown={(e) => handlePlaceholderMouseDown(e, globalIndex)}
                   >
                     <span className="text-xs text-blue-700 font-medium pointer-events-none">Sign Here</span>
                     <Button
+                      type="button"
                       size="sm"
                       variant="ghost"
                       className="absolute -top-2 -right-2 w-6 h-6 p-0 opacity-0 group-hover:opacity-100 bg-red-500 hover:bg-red-600 text-white rounded-full"
                       onClick={(e) => {
+                        e.preventDefault();
                         e.stopPropagation();
                         removePlaceholder(globalIndex);
                       }}
@@ -191,20 +199,28 @@ export const PlaceholderManager = ({ pdfFile, onPlaceholdersChange, initialPlace
       {numPages && numPages > 1 && (
         <div className="flex items-center justify-center gap-4">
           <Button
+            type="button"
             variant="outline"
             size="sm"
             disabled={currentPage <= 1}
-            onClick={() => setCurrentPage(prev => prev - 1)}
+            onClick={(e) => {
+              e.preventDefault();
+              setCurrentPage(prev => prev - 1);
+            }}
             className="hover:bg-gray-100 focus:ring-2 focus:ring-blue-500"
           >
             Previous
           </Button>
           <span className="text-sm font-medium">Page {currentPage} of {numPages}</span>
           <Button
+            type="button"
             variant="outline"
             size="sm"
             disabled={currentPage >= numPages}
-            onClick={() => setCurrentPage(prev => prev + 1)}
+            onClick={(e) => {
+              e.preventDefault();
+              setCurrentPage(prev => prev + 1);
+            }}
             className="hover:bg-gray-100 focus:ring-2 focus:ring-blue-500"
           >
             Next
@@ -217,9 +233,11 @@ export const PlaceholderManager = ({ pdfFile, onPlaceholdersChange, initialPlace
         <div className="flex gap-2">
           {numPages && numPages > 1 && (
             <Button
+              type="button"
               variant="outline"
               size="sm"
-              onClick={() => {
+              onClick={(e) => {
+                e.preventDefault();
                 const currentPagePlaceholder = placeholders.find(p => p.page === currentPage);
                 if (currentPagePlaceholder) {
                   const newPlaceholders = [];
@@ -241,9 +259,13 @@ export const PlaceholderManager = ({ pdfFile, onPlaceholdersChange, initialPlace
           )}
           {placeholders.length > 0 && (
             <Button
+              type="button"
               variant="outline"
               size="sm"
-              onClick={() => setPlaceholders([])}
+              onClick={(e) => {
+                e.preventDefault();
+                setPlaceholders([]);
+              }}
               className="hover:bg-red-50 hover:text-red-600"
             >
               Clear All
