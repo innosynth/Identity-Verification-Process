@@ -179,6 +179,22 @@ const createTables = async () => {
       )
     `);
     
+    // Create signature_placeholders table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS signature_placeholders (
+        id SERIAL PRIMARY KEY,
+        envelope_id VARCHAR(255) REFERENCES envelopes(id) ON DELETE CASCADE,
+        page_number INTEGER NOT NULL,
+        x_position FLOAT NOT NULL,
+        y_position FLOAT NOT NULL,
+        width FLOAT DEFAULT 128,
+        height FLOAT DEFAULT 64,
+        is_signed BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('Signature placeholders table created or already exists.');
+    
     // Ensure CASCADE constraints are properly set
     await pool.query(`
       ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_recipient_id_fkey;
@@ -346,7 +362,7 @@ const verificationWorkflows = {
 
 // Endpoint for uploading documents and saving recipient data
 app.post('/api/signing-session', authenticateApiKey, upload.array('documents'), async (req, res) => {
-  const { recipientName, recipientEmail, workflowId = 'WF_STANDARD' } = req.body;
+  const { recipientName, recipientEmail, workflowId = 'WF_STANDARD', signaturePlaceholders } = req.body;
   const files = req.files;
 
   console.log('Creating signing session:', { recipientName, recipientEmail, fileCount: files?.length });
@@ -430,6 +446,20 @@ app.post('/api/signing-session', authenticateApiKey, upload.array('documents'), 
     const envelopeQuery = 'INSERT INTO envelopes (id, recipient_id, status, expires_at, workflow_id) VALUES ($1, $2, $3, $4, $5)';
     await pool.query(envelopeQuery, [envelopeId, recipientId, 'pending', expiresAt, workflowId]);
     console.log('Envelope created with ID:', envelopeId);
+    
+    // Save signature placeholders if provided
+    if (signaturePlaceholders) {
+      try {
+        const placeholders = JSON.parse(signaturePlaceholders);
+        for (const placeholder of placeholders) {
+          const placeholderQuery = 'INSERT INTO signature_placeholders (envelope_id, page_number, x_position, y_position, width, height) VALUES ($1, $2, $3, $4, $5, $6)';
+          await pool.query(placeholderQuery, [envelopeId, placeholder.page, placeholder.x, placeholder.y, placeholder.width || 128, placeholder.height || 64]);
+        }
+        console.log('Signature placeholders saved:', placeholders.length);
+      } catch (placeholderError) {
+        console.error('Error saving signature placeholders:', placeholderError);
+      }
+    }
 
     res.status(201).json({
       message: 'Signing session created successfully',
@@ -483,6 +513,8 @@ app.get('/api/signing-session/:id', authenticateApiKey, async (req, res) => {
     const documentsResult = await pool.query(documentsQuery, [envelope.recipient_id]);
     const signaturesQuery = 'SELECT * FROM signatures WHERE envelope_id = $1';
     const signaturesResult = await pool.query(signaturesQuery, [id]);
+    const placeholdersQuery = 'SELECT * FROM signature_placeholders WHERE envelope_id = $1 ORDER BY page_number, x_position';
+    const placeholdersResult = await pool.query(placeholdersQuery, [id]);
     
     console.log('Associated data found:', {
       recipient: !!recipientResult.rows[0],
@@ -495,7 +527,8 @@ app.get('/api/signing-session/:id', authenticateApiKey, async (req, res) => {
         ...envelope,
         recipient: recipientResult.rows[0],
         documents: documentsResult.rows,
-        signatures: signaturesResult.rows
+        signatures: signaturesResult.rows,
+        signaturePlaceholders: placeholdersResult.rows
       }
     });
   } catch (error) {
@@ -1305,6 +1338,20 @@ app.post('/api/sign-pdf', authenticateApiKey, upload.single('pdf'), async (req, 
       } catch (fallbackError) {
         console.error('Failed to load PDF completely:', fallbackError.message);
         throw new Error('Unable to load PDF document. The file may be corrupted or use an unsupported encryption method.');
+      }
+    }
+    
+    // Mark placeholders as signed if envelope has placeholders
+    if (envelopeId) {
+      try {
+        for (const sig of signatures) {
+          if (sig.placeholderId) {
+            await pool.query('UPDATE signature_placeholders SET is_signed = TRUE WHERE id = $1 AND envelope_id = $2', [sig.placeholderId, envelopeId]);
+            console.log('Marked placeholder as signed:', sig.placeholderId);
+          }
+        }
+      } catch (error) {
+        console.error('Error updating signed placeholders:', error);
       }
     }
     

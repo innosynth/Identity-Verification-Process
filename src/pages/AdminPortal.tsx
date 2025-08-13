@@ -5,6 +5,7 @@ import { Loader2, Search, Download, Key, Trash2 } from "lucide-react";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { PlaceholderManager } from "../components/admin/PlaceholderManager";
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -34,6 +35,8 @@ const AdminPortal = () => {
   const [newFiles, setNewFiles] = useState<File[]>([]);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [signaturePlaceholders, setSignaturePlaceholders] = useState<any[]>([]);
+  const [showPlaceholderManager, setShowPlaceholderManager] = useState(false);
 
   // Move fetchSessions out of useEffect so it can be called elsewhere
   const fetchSessions = async () => {
@@ -82,6 +85,17 @@ const AdminPortal = () => {
       fetchApiKeys();
     }
   }, [activeTab]);
+
+  // Add keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && isCreateModalOpen) {
+        setIsCreateModalOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isCreateModalOpen]);
 
   const fetchApiKeys = async () => {
     try {
@@ -346,6 +360,9 @@ const AdminPortal = () => {
       formData.append('recipientName', newRecipientName);
       formData.append('recipientEmail', newRecipientEmail);
       newFiles.forEach(file => formData.append('documents', file));
+      if (signaturePlaceholders.length > 0) {
+        formData.append('signaturePlaceholders', JSON.stringify(signaturePlaceholders));
+      }
       const response = await fetch(`${API_URL}/api/signing-session`, {
         method: 'POST',
         headers: {
@@ -361,6 +378,8 @@ const AdminPortal = () => {
       setNewRecipientName('');
       setNewRecipientEmail('');
       setNewFiles([]);
+      setSignaturePlaceholders([]);
+      setShowPlaceholderManager(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
       fetchSessions();
       alert('Session created successfully!');
@@ -707,28 +726,84 @@ const AdminPortal = () => {
 
         {/* Create Session Modal */}
         <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
-          <DialogContent>
-            <DialogHeader>
+          <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col p-0">
+            <DialogHeader className="px-6 py-4 border-b">
               <DialogTitle>Create New Signing Session</DialogTitle>
             </DialogHeader>
-            <form onSubmit={handleCreateSession} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Recipient Name</label>
-                <Input value={newRecipientName} onChange={e => setNewRecipientName(e.target.value)} required />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Recipient Email</label>
-                <Input type="email" value={newRecipientEmail} onChange={e => setNewRecipientEmail(e.target.value)} required />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Upload Document(s)</label>
-                <Input type="file" ref={fileInputRef} multiple accept="application/pdf" onChange={e => setNewFiles(Array.from(e.target.files || []))} required />
-              </div>
-              <div className="flex gap-4 justify-end">
-                <Button type="button" variant="outline" onClick={() => setIsCreateModalOpen(false)} disabled={isCreatingSession}>Cancel</Button>
-                <Button type="submit" disabled={isCreatingSession}>{isCreatingSession ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}Create</Button>
-              </div>
-            </form>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <form onSubmit={handleCreateSession} className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Recipient Name</label>
+                    <Input 
+                      value={newRecipientName} 
+                      onChange={e => setNewRecipientName(e.target.value)} 
+                      required 
+                      className="focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Recipient Email</label>
+                    <Input 
+                      type="email" 
+                      value={newRecipientEmail} 
+                      onChange={e => setNewRecipientEmail(e.target.value)} 
+                      required 
+                      className="focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Upload Document(s)</label>
+                  <Input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    multiple 
+                    accept="application/pdf" 
+                    onChange={e => {
+                      const files = Array.from(e.target.files || []);
+                      setNewFiles(files);
+                      if (files.length > 0) {
+                        setShowPlaceholderManager(true);
+                      }
+                    }} 
+                    required 
+                    className="focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                {showPlaceholderManager && newFiles.length > 0 && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-900 mb-3">Define Signature Locations</label>
+                    <div className="border rounded-lg p-4 bg-gray-50">
+                      <PlaceholderManager
+                        pdfFile={newFiles[0]}
+                        onPlaceholdersChange={setSignaturePlaceholders}
+                        initialPlaceholders={signaturePlaceholders}
+                      />
+                    </div>
+                  </div>
+                )}
+              </form>
+            </div>
+            <div className="border-t px-6 py-4 flex gap-3 justify-end bg-gray-50">
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => setIsCreateModalOpen(false)} 
+                disabled={isCreatingSession}
+                className="hover:bg-gray-100 focus:ring-2 focus:ring-gray-500"
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleCreateSession}
+                disabled={isCreatingSession}
+                className="hover:bg-blue-600 focus:ring-2 focus:ring-blue-500"
+              >
+                {isCreatingSession ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                Create
+              </Button>
+            </div>
           </DialogContent>
         </Dialog>
       </div>

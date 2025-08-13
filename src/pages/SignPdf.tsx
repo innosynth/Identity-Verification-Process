@@ -111,6 +111,16 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
     page: number;
     position: { x: number; y: number };
     signature: SignatureData;
+    placeholderId?: number;
+  }>>([]);
+  const [signaturePlaceholders, setSignaturePlaceholders] = useState<Array<{
+    id: number;
+    page_number: number;
+    x_position: number;
+    y_position: number;
+    width: number;
+    height: number;
+    is_signed: boolean;
   }>>([]);
   // Add state for the signature data for each type
   const [userSignature, setUserSignature] = useState<SignatureData | null>(null);
@@ -152,6 +162,11 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
         .then(data => {
           console.log('Session data loaded:', data);
           const session = data.session;
+          
+          // Load signature placeholders
+          if (session.signaturePlaceholders) {
+            setSignaturePlaceholders(session.signaturePlaceholders);
+          }
           
           // If envelope is already completed, show completion page
           if (session.status === 'completed') {
@@ -324,15 +339,23 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
           let newX = (newScreenX / pageRect.width) * pageDimensions.width;
           let newY = (newScreenY / pageRect.height) * pageDimensions.height;
           
-          // Only clamp to prevent going completely off-page
-          const signatureWidth = 128;
-          const signatureHeight = 80;
-          newX = Math.max(0, Math.min(newX, pageDimensions.width - signatureWidth));
-          newY = Math.max(0, Math.min(newY, pageDimensions.height - signatureHeight));
+          // If placeholders exist, snap to nearest placeholder
+          let placeholderId = currentSig.placeholderId;
+          if (signaturePlaceholders.length > 0) {
+            const nearestPlaceholder = findNearestPlaceholder(newX, newY, pageNumber);
+            if (nearestPlaceholder && !isPlaceholderOccupied(nearestPlaceholder.id, signatureIndex)) {
+              newX = nearestPlaceholder.x_position;
+              newY = nearestPlaceholder.y_position;
+              placeholderId = nearestPlaceholder.id;
+            } else {
+              setErrorMessage('Signatures can only be placed in the designated signature areas marked on the document.');
+              return;
+            }
+          }
           
           setSignaturesOnPages(prev => prev.map((sig, idx) => 
             idx === signatureIndex 
-              ? { ...sig, position: { x: newX, y: newY }, page: pageNumber }
+              ? { ...sig, position: { x: newX, y: newY }, page: pageNumber, placeholderId }
               : sig
           ));
         }
@@ -349,17 +372,34 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
           if (pageDimensions.width > 0 && pageDimensions.height > 0) {
             x = (x / pageRect.width) * pageDimensions.width;
             y = (y / pageRect.height) * pageDimensions.height;
+          } else {
+            return; // Skip if dimensions not ready
           }
           
-          // Only clamp to prevent going completely off-page
-          const signatureWidth = 128;
-          const signatureHeight = 80;
-          x = Math.max(0, Math.min(x, pageDimensions.width - signatureWidth));
-          y = Math.max(0, Math.min(y, pageDimensions.height - signatureHeight));
+          let placeholderId: number | undefined;
+          
+          // If placeholders exist, snap to nearest placeholder
+          if (signaturePlaceholders.length > 0) {
+            const nearestPlaceholder = findNearestPlaceholder(x, y, pageNumber);
+            if (nearestPlaceholder && !isPlaceholderOccupied(nearestPlaceholder.id)) {
+              x = nearestPlaceholder.x_position;
+              y = nearestPlaceholder.y_position;
+              placeholderId = nearestPlaceholder.id;
+            } else {
+              setErrorMessage('Signatures can only be placed in the designated signature areas marked on the document.');
+              return;
+            }
+          } else {
+            // Only clamp to prevent going completely off-page when no placeholders
+            const signatureWidth = 128;
+            const signatureHeight = 80;
+            x = Math.max(0, Math.min(x, pageDimensions.width - signatureWidth));
+            y = Math.max(0, Math.min(y, pageDimensions.height - signatureHeight));
+          }
           
           setSignaturesOnPages(prev => [
             ...prev,
-            { page: pageNumber, position: { x, y }, signature: signatureData },
+            { page: pageNumber, position: { x, y }, signature: signatureData, placeholderId },
           ]);
         }
       }
@@ -410,7 +450,21 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
       setErrorMessage('Please provide your signature before submitting.');
       return;
     }
-    if (signaturesOnPages.length === 0) {
+    
+    // Check if placeholders are defined and enforce them
+    if (signaturePlaceholders.length > 0) {
+      const unsignedPlaceholders = signaturePlaceholders.filter(p => !signaturesOnPages.some(sig => sig.placeholderId === p.id));
+      if (unsignedPlaceholders.length > 0) {
+        const placeholdersByPage = unsignedPlaceholders.reduce((acc, p) => {
+          if (!acc[p.page_number]) acc[p.page_number] = [];
+          acc[p.page_number].push(p);
+          return acc;
+        }, {});
+        const pageList = Object.keys(placeholdersByPage).map(page => `Page ${page} (${placeholdersByPage[page].length} signature${placeholdersByPage[page].length > 1 ? 's' : ''})`).join(', ');
+        setErrorMessage(`Please sign all required locations before submitting. Missing signatures on: ${pageList}`);
+        return;
+      }
+    } else if (signaturesOnPages.length === 0) {
       setErrorMessage('Please place your signature on at least one page.');
       return;
     }
@@ -427,6 +481,7 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
       name: sig.signature.name,
       ipAddress: sig.signature.ipAddress,
       timestamp: sig.signature.timestamp,
+      placeholderId: sig.placeholderId,
     }));
     
     console.log('Submitting signed PDF with', signatures.length, 'signatures');
@@ -539,9 +594,37 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
 
 
 
+  // Helper functions for placeholder management
+  const findNearestPlaceholder = (x: number, y: number, page: number) => {
+    if (signaturePlaceholders.length === 0 || pageDimensions.width === 0) return null;
+    
+    const pageePlaceholders = signaturePlaceholders.filter(p => p.page_number === page);
+    let nearest = null;
+    let minDistance = Infinity;
+    const snapDistance = 50; // Reduced snap distance
+    
+    for (const placeholder of pageePlaceholders) {
+      const distance = Math.sqrt(
+        Math.pow(x - placeholder.x_position, 2) + Math.pow(y - placeholder.y_position, 2)
+      );
+      if (distance < minDistance && distance < snapDistance) {
+        minDistance = distance;
+        nearest = placeholder;
+      }
+    }
+    
+    return nearest;
+  };
+  
+  const isPlaceholderOccupied = (placeholderId: number, excludeIndex?: number) => {
+    return signaturesOnPages.some((sig, idx) => 
+      sig.placeholderId === placeholderId && idx !== excludeIndex
+    );
+  };
+
   // PDF click handler for tap-to-place (mobile)
   function handlePdfClick(event: React.MouseEvent<HTMLDivElement, MouseEvent>) {
-    if (!userSignature || signaturesOnPages.some(sig => sig.page === pageNumber)) return;
+    if (!userSignature || pageDimensions.width === 0 || pageDimensions.height === 0) return;
     
     // Get click coordinates relative to PDF
     const pdfRect = pdfPageRef.current?.getBoundingClientRect();
@@ -551,20 +634,33 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
     let y = event.clientY - pdfRect.top;
     
     // Scale to PDF dimensions
-    if (pageDimensions.width > 0 && pageDimensions.height > 0) {
-      x = (x / pdfRect.width) * pageDimensions.width;
-      y = (y / pdfRect.height) * pageDimensions.height;
-    }
+    x = (x / pdfRect.width) * pageDimensions.width;
+    y = (y / pdfRect.height) * pageDimensions.height;
     
-    // Only clamp to prevent going completely off-page
-    const signatureWidth = 128;
-    const signatureHeight = 80;
-    x = Math.max(0, Math.min(x, pageDimensions.width - signatureWidth));
-    y = Math.max(0, Math.min(y, pageDimensions.height - signatureHeight));
+    let placeholderId: number | undefined;
+    
+    // If placeholders exist, snap to nearest placeholder
+    if (signaturePlaceholders.length > 0) {
+      const nearestPlaceholder = findNearestPlaceholder(x, y, pageNumber);
+      if (nearestPlaceholder && !isPlaceholderOccupied(nearestPlaceholder.id)) {
+        x = nearestPlaceholder.x_position;
+        y = nearestPlaceholder.y_position;
+        placeholderId = nearestPlaceholder.id;
+      } else {
+        setErrorMessage('Signatures can only be placed in the designated signature areas marked on the document.');
+        return;
+      }
+    } else {
+      // Only clamp to prevent going completely off-page when no placeholders
+      const signatureWidth = 128;
+      const signatureHeight = 80;
+      x = Math.max(0, Math.min(x, pageDimensions.width - signatureWidth));
+      y = Math.max(0, Math.min(y, pageDimensions.height - signatureHeight));
+    }
     
     setSignaturesOnPages(prev => [
       ...prev,
-      { page: pageNumber, position: { x, y }, signature: userSignature },
+      { page: pageNumber, position: { x, y }, signature: userSignature, placeholderId },
     ]);
   }
 
@@ -753,8 +849,8 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                               scale={1}
                               onRenderSuccess={(page) => setPageDimensions({ width: page.width, height: page.height })}
                             >
-                              {/* Add clickable 'Sign here' placeholder */}
-                              {pageNumber === 1 && signaturesOnPages.length === 0 && userSignature && (
+                              {/* Add clickable 'Sign here' placeholder only when no placeholders are defined */}
+                              {signaturePlaceholders.length === 0 && pageNumber === 1 && signaturesOnPages.length === 0 && userSignature && (
                                 <div
                                   style={{ position: 'absolute', left: '50%', bottom: '15%', transform: 'translateX(-50%)', zIndex: 5 }}
                                   className="bg-blue-100 border-2 border-dashed border-blue-400 rounded-lg p-3 text-center w-48 opacity-80 cursor-pointer hover:bg-blue-200 transition-colors"
@@ -776,6 +872,36 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                                 </div>
                               )}
                             </Page>
+                            {/* Render signature placeholders for this page */}
+                            {signaturePlaceholders.filter(p => p.page_number === pageNumber).map((placeholder) => {
+                              const isOccupied = signaturesOnPages.some(sig => sig.placeholderId === placeholder.id);
+                              const renderX = (placeholder.x_position / pageDimensions.width) * (pdfPageRef.current?.clientWidth || 1);
+                              const renderY = (placeholder.y_position / pageDimensions.height) * (pdfPageRef.current?.clientHeight || 1);
+                              const renderWidth = (placeholder.width / pageDimensions.width) * (pdfPageRef.current?.clientWidth || 1);
+                              const renderHeight = (placeholder.height / pageDimensions.height) * (pdfPageRef.current?.clientHeight || 1);
+                              
+                              return (
+                                <div
+                                  key={placeholder.id}
+                                  className={`absolute border-2 border-dashed rounded flex items-center justify-center text-xs font-medium transition-all duration-200 ${
+                                    isOccupied 
+                                      ? 'border-green-400 bg-green-100 text-green-700 shadow-sm' 
+                                      : 'border-red-400 bg-red-50 text-red-700 animate-pulse'
+                                  }`}
+                                  style={{
+                                    left: renderX,
+                                    top: renderY,
+                                    width: renderWidth,
+                                    height: renderHeight,
+                                    zIndex: 5
+                                  }}
+                                  title={isOccupied ? 'This location has been signed' : 'Required signature location - drag your signature here'}
+                                >
+                                  {isOccupied ? '✓ Signed' : '⚠️ Required'}
+                                </div>
+                              );
+                            })}
+                            
                             {/* Render placed signatures for this page */}
                             {signaturesOnPages.filter(sig => sig.page === pageNumber).map((sig) => {
                               const globalIdx = signaturesOnPages.findIndex(s => s === sig);
@@ -819,7 +945,7 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                             Next
                           </Button>
                         </div>
-                        {userSignature && numPages > 1 && (
+                        {userSignature && signaturePlaceholders.length === 0 && numPages > 1 && (
                           <Button 
                             onClick={() => {
                               const newSignatures = [];
@@ -841,7 +967,39 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                             Sign All Pages
                           </Button>
                         )}
-                        {signaturesOnPages.length > 0 && (
+                        {userSignature && signaturePlaceholders.length > 0 && (
+                          <Button 
+                            onClick={() => {
+                              const newSignatures = [];
+                              for (const placeholder of signaturePlaceholders) {
+                                if (!signaturesOnPages.some(sig => sig.placeholderId === placeholder.id)) {
+                                  newSignatures.push({
+                                    page: placeholder.page_number,
+                                    position: { x: placeholder.x_position, y: placeholder.y_position },
+                                    signature: userSignature,
+                                    placeholderId: placeholder.id
+                                  });
+                                }
+                              }
+                              setSignaturesOnPages(prev => [...prev, ...newSignatures]);
+                            }}
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                          >
+                            Sign All Required
+                          </Button>
+                        )}
+                        {signaturePlaceholders.length > 0 ? (
+                          <div className="text-xs text-gray-500">
+                            <div>Signed: {signaturesOnPages.filter(sig => sig.placeholderId).length} of {signaturePlaceholders.length} required signatures</div>
+                            {signaturesOnPages.filter(sig => sig.placeholderId).length < signaturePlaceholders.length && (
+                              <div className="text-red-500 font-medium mt-1">
+                                ⚠️ All signature locations must be signed before submission
+                              </div>
+                            )}
+                          </div>
+                        ) : signaturesOnPages.length > 0 && (
                           <div className="text-xs text-gray-500">
                             Signed: {signaturesOnPages.length} of {numPages} pages
                           </div>
@@ -852,8 +1010,14 @@ const SignPdf: React.FC<SignPdfProps> = ({ id: propId, token: propToken, onCompl
                     <div className="mt-8 flex justify-center gap-4">
                       <Button
                         onClick={handleSubmitSignedPdf}
-                        disabled={isSubmitting || !userSignature || signaturesOnPages.length === 0}
+                        disabled={isSubmitting || !userSignature || 
+                          (signaturePlaceholders.length > 0 
+                            ? signaturesOnPages.filter(sig => sig.placeholderId).length < signaturePlaceholders.length
+                            : signaturesOnPages.length === 0)}
                         className="px-8 py-2"
+                        title={signaturePlaceholders.length > 0 && signaturesOnPages.filter(sig => sig.placeholderId).length < signaturePlaceholders.length 
+                          ? `Please sign all ${signaturePlaceholders.length} required signature locations before submitting` 
+                          : ''}
                       >
                         {isSubmitting ? 'Submitting...' : 'Sign & Submit'}
                       </Button>
